@@ -26,6 +26,30 @@ Set a provider key:
 
 ```sh
 export ANTHROPIC_API_KEY=...
+# or OPENAI_API_KEY=..., GEMINI_API_KEY=..., OPENROUTER_API_KEY=...
+```
+
+TurnKit uses RubyLLM by default. Choose the provider by choosing a RubyLLM model name:
+
+```ruby
+TurnKit.default_model = "claude-sonnet-4-5" # Anthropic
+# TurnKit.default_model = "gpt-4.1-mini"    # OpenAI
+# TurnKit.default_model = "gemini-2.5-flash" # Gemini
+```
+
+You can also override the model per agent or per run.
+
+To use a different model SDK, provide a client object that responds to `chat`:
+
+```ruby
+class MyClient < TurnKit::Client
+  def chat(model:, messages:, tools:, instructions:, temperature: nil, metadata: nil)
+    # Call your provider here.
+    TurnKit::Result.new(text: "provider response", model: model)
+  end
+end
+
+TurnKit.client = MyClient.new
 ```
 
 Ask an agent:
@@ -212,10 +236,17 @@ agent = TurnKit::Agent.new(
 )
 ```
 
+Override the model for a single conversation or turn:
+
+```ruby
+conversation = agent.conversation(model: "claude-opus-4-1")
+turn = conversation.run!(model: "gpt-4.1-mini")
+```
+
 | Option | Description |
 | --- | --- |
-| `default_model` | Set the default model. |
-| `client` | Set the model client. |
+| `default_model` | Set the default RubyLLM model. The model name determines the provider. |
+| `client` | Set the model client. Defaults to `TurnKit::Adapters::RubyLLM.new`. |
 | `store` | Set the conversation store. |
 | `max_iterations` | Limit model calls per turn. |
 | `timeout` | Limit seconds per root turn. |
