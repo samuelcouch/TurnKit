@@ -3,6 +3,7 @@
 require "json"
 require "securerandom"
 require "time"
+require "date"
 
 require_relative "turnkit/version"
 require_relative "turnkit/error"
@@ -16,6 +17,7 @@ require_relative "turnkit/message"
 require_relative "turnkit/record"
 require_relative "turnkit/result"
 require_relative "turnkit/skill"
+require_relative "turnkit/system_prompt"
 require_relative "turnkit/store"
 require_relative "turnkit/memory_store"
 require_relative "turnkit/tool"
@@ -36,6 +38,7 @@ module TurnKit
     attr_accessor :default_model, :client, :store, :logger
     attr_accessor :max_iterations, :timeout, :max_depth, :max_tool_executions
     attr_accessor :cost_limit
+    attr_accessor :prompt_sections, :prompt_behavior, :available_skills
     attr_accessor :conversation_record_class, :turn_record_class
     attr_accessor :message_record_class, :tool_execution_record_class
   end
@@ -47,6 +50,8 @@ module TurnKit
   self.timeout = 300
   self.max_depth = 3
   self.max_tool_executions = 100
+  self.prompt_sections = SystemPrompt::DEFAULT_SECTIONS.dup
+  self.available_skills = []
 
   def self.reconcile_stale!(before: Clock.now - (timeout || 300))
     store.find_stale_turns(before: before).each do |turn|

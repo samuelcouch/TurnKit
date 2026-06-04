@@ -10,6 +10,10 @@ module TurnKit
       new(key: key || base, name: name || base.tr("_-", " ").split.map(&:capitalize).join(" "), description: description, content: content)
     end
 
+    def self.from_directory(path, pattern: "*.md")
+      Dir.glob(File.join(path, pattern)).sort.map { |file| from_file(file) }
+    end
+
     def initialize(key:, name:, content:, description: "")
       @key = key.to_s
       @name = name.to_s

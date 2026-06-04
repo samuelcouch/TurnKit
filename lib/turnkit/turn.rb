@@ -7,6 +7,7 @@ module TurnKit
     attr_reader :agent, :conversation, :store, :budget, :depth
     attr_reader :id, :conversation_id, :agent_name, :parent_turn_id, :parent_tool_execution_id
     attr_reader :root_turn_id, :context_message_sequence, :model
+    attr_reader :started_at
 
     def initialize(agent:, conversation:, record:, store:, budget: nil, depth: 0)
       @agent = agent
@@ -21,6 +22,7 @@ module TurnKit
       @root_turn_id = @record["root_turn_id"] || id
       @context_message_sequence = @record["context_message_sequence"].to_i
       @model = @record["model"] || agent.effective_model
+      @started_at = @record["started_at"]
       @budget = budget || agent.build_budget
       @depth = depth
     end
@@ -37,7 +39,7 @@ module TurnKit
           model: model,
           messages: llm_messages,
           tools: agent.effective_tools,
-          instructions: agent.instructions_with_skills,
+          instructions: agent.system_prompt_for(turn: self, conversation: conversation),
           metadata: { turn_id: id, conversation_id: conversation.id }
         )
 
@@ -128,6 +130,9 @@ module TurnKit
 
       def update!(attributes)
         @record = store.update_turn(id, attributes)
+        @started_at = @record["started_at"]
+        @model = @record["model"] || agent.effective_model
+        @record
       end
   end
 

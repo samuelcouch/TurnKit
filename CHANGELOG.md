@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 - 2026-06-04
+
+- Add configurable system prompt sections and custom system prompt builders.
+- Add globally and per-agent available skills for prompt guidance.
+- Add skill loading from directories.
+
 ## 0.1.0 - 2026-06-04
 
 - Initial release of TurnKit.

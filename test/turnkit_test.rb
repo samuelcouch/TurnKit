@@ -41,6 +41,22 @@ class ContextCheckingTool < TurnKit::Tool
   end
 end
 
+class StatusTool < TurnKit::Tool
+  tool_name "status_tool"
+  description "Look up status."
+  parameter :id, :string, required: true, description: "Status id."
+
+  def call(id:, context:)
+    { id: id, status: "ok" }
+  end
+end
+
+class PromptSubject
+  def to_prompt
+    "Subject facts."
+  end
+end
+
 class TurnKitTest < Minitest::Test
   def test_agent_runs_plain_text_turn
     client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 2, output_tokens: 3)))
@@ -52,6 +68,122 @@ class TurnKitTest < Minitest::Test
     assert_equal "hello", turn.output_text
     assert_equal "model-a", client.calls.first.fetch(:model)
     assert_equal [ :user ], client.calls.first.fetch(:messages).map { |message| message.fetch(:role) }
+  end
+
+  def test_default_system_prompt_includes_agent_context_tools_skills_subject_and_environment
+    skill = TurnKit::Skill.new(key: "research", name: "Research", description: "Use sources.", content: "Verify claims.")
+    available = TurnKit::Skill.new(key: "writer", name: "Writer", description: "Draft prose.", content: "Write clearly.")
+    client = FakeClient.new(TurnKit::Result.new(text: "ok"))
+    agent = TurnKit::Agent.new(
+      name: "researcher",
+      description: "Researches topics.",
+      model: "model-a",
+      instructions: "Be brief.",
+      tools: [ StatusTool ],
+      skills: [ skill ],
+      available_skills: [ available ],
+      client: client
+    )
+
+    agent.conversation(subject: PromptSubject.new).ask("Go")
+
+    instructions = client.calls.first.fetch(:instructions)
+    assert_includes instructions, "<agent>"
+    assert_includes instructions, "- Name: researcher"
+    assert_includes instructions, "- Description: Researches topics."
+    assert_includes instructions, "<instructions>\nBe brief."
+    assert_includes instructions, "<skills_loaded>"
+    assert_includes instructions, "## Skill: research"
+    assert_includes instructions, "Verify claims."
+    assert_includes instructions, "<skills_available>"
+    assert_includes instructions, "- writer: Writer — Draft prose."
+    assert_includes instructions, "<tools_available>"
+    assert_includes instructions, "- status_tool: Look up status. Parameters: id(string required)."
+    assert_includes instructions, "<subject_context>\nSubject facts."
+    assert_includes instructions, "<environment>"
+    assert_includes instructions, "- Today:"
+  end
+
+  def test_prompt_sections_can_opt_out_of_defaults
+    client = FakeClient.new(TurnKit::Result.new(text: "ok"))
+    agent = TurnKit::Agent.new(
+      name: "helper",
+      instructions: "Only this.",
+      tools: [ StatusTool ],
+      prompt_sections: %i[instructions tools],
+      client: client
+    )
+
+    agent.conversation.ask("Go")
+
+    instructions = client.calls.first.fetch(:instructions)
+    assert_includes instructions, "<instructions>"
+    assert_includes instructions, "<tools_available>"
+    refute_includes instructions, "<agent>"
+    refute_includes instructions, "<environment>"
+    refute_includes instructions, "<behavior>"
+  end
+
+  def test_system_prompt_callable_can_compose_default_sections
+    client = FakeClient.new(TurnKit::Result.new(text: "ok"))
+    agent = TurnKit::Agent.new(
+      name: "helper",
+      instructions: "Base.",
+      system_prompt: ->(prompt) { [ prompt.agent_section, prompt.instructions_section, "Custom policy." ].join("\n\n") },
+      client: client
+    )
+
+    agent.conversation.ask("Go")
+
+    instructions = client.calls.first.fetch(:instructions)
+    assert_includes instructions, "<agent>"
+    assert_includes instructions, "<instructions>"
+    assert_includes instructions, "Custom policy."
+    refute_includes instructions, "<tools_available>"
+  end
+
+  def test_system_prompt_string_replaces_default_builder
+    client = FakeClient.new(TurnKit::Result.new(text: "ok"))
+    agent = TurnKit::Agent.new(name: "helper", system_prompt: "Fixed prompt.", instructions: "Ignored.", client: client)
+
+    agent.conversation.ask("Go")
+
+    assert_equal "Fixed prompt.", client.calls.first.fetch(:instructions)
+  end
+
+  def test_unknown_prompt_sections_raise_clear_error
+    agent = TurnKit::Agent.new(name: "helper", prompt_sections: %i[instruction])
+    conversation = agent.conversation
+    turn = conversation.ask("Go", async: true)
+
+    error = assert_raises(ArgumentError) do
+      agent.system_prompt_for(turn: turn, conversation: conversation)
+    end
+
+    assert_equal "unknown prompt section: instruction", error.message
+  end
+
+  def test_custom_prompt_behavior_is_wrapped_once
+    TurnKit.prompt_behavior = "Custom behavior."
+    agent = TurnKit::Agent.new(name: "helper", prompt_sections: %i[behavior])
+    conversation = agent.conversation
+    turn = conversation.ask("Go", async: true)
+
+    assert_equal "<behavior>\nCustom behavior.\n</behavior>", agent.system_prompt_for(turn: turn, conversation: conversation)
+  end
+
+  def test_available_skills_are_deduplicated_by_key
+    global = TurnKit::Skill.new(key: "writer", name: "Writer", description: "Global.", content: "Write globally.")
+    duplicate = TurnKit::Skill.new(key: "writer", name: "Writer", description: "Agent.", content: "Write locally.")
+    TurnKit.available_skills = [ global ]
+    agent = TurnKit::Agent.new(name: "helper", available_skills: [ duplicate ], prompt_sections: %i[available_skills])
+    conversation = agent.conversation
+    turn = conversation.ask("Go", async: true)
+
+    prompt = agent.system_prompt_for(turn: turn, conversation: conversation)
+
+    assert_includes prompt, "- writer: Writer — Global."
+    refute_includes prompt, "Agent."
   end
 
   def test_terminal_tool_completes_turn
@@ -80,7 +212,7 @@ class TurnKitTest < Minitest::Test
     agent.conversation.ask("Go")
 
     assert_includes client.calls.first.fetch(:instructions), "Base"
-    assert_includes client.calls.first.fetch(:instructions), "## Skill: Research"
+    assert_includes client.calls.first.fetch(:instructions), "## Skill: research"
     assert_includes client.calls.first.fetch(:instructions), "Use sources."
   end
 

@@ -4,7 +4,7 @@
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1-red.svg)](https://www.ruby-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.md)
 
-Ruby AI agent runtime with durable turns, tools, skills, and Rails persistence.
+Build durable Ruby AI agents with turns, tools, skills, and Rails persistence.
 
 ## Installation
 
@@ -22,11 +22,13 @@ bundle install
 
 ## Quick Start
 
-Set a provider key, then ask an agent:
+Set a provider key:
 
 ```sh
 export ANTHROPIC_API_KEY=...
 ```
+
+Ask an agent:
 
 ```ruby
 require "turnkit"
@@ -98,6 +100,55 @@ agent = TurnKit::Agent.new(
 )
 ```
 
+List available skills:
+
+```ruby
+research = TurnKit::Skill.from_file(
+  "skills/research.md",
+  description: "Use for source-backed research tasks."
+)
+
+agent = TurnKit::Agent.new(
+  name: "researcher",
+  instructions: "Prefer primary sources.",
+  tools: [WebSearch, ReadWebPage],
+  available_skills: [research]
+)
+```
+
+Add subject context:
+
+```ruby
+article = Article.find(1)
+conversation = agent.conversation(subject: article)
+```
+
+Choose prompt sections:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "writer",
+  instructions: "Write plainly.",
+  prompt_sections: %i[agent instructions tools environment]
+)
+```
+
+Build a custom prompt:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "custom",
+  instructions: "Answer in JSON.",
+  system_prompt: ->(prompt) {
+    [
+      prompt.agent_section,
+      prompt.instructions_section,
+      "Return only valid JSON."
+    ].compact.join("\n\n")
+  }
+)
+```
+
 Delegate to sub-agents:
 
 ```ruby
@@ -125,7 +176,6 @@ bin/rails db:migrate
 Configure Rails:
 
 ```ruby
-# config/initializers/turnkit.rb
 TurnKit.store = TurnKit::ActiveRecordStore.new
 TurnKit.default_model = "claude-sonnet-4-5"
 TurnKit.timeout = 300
@@ -139,7 +189,7 @@ TurnKit.reconcile_stale!
 
 ## Options
 
-Configure defaults globally:
+Configure defaults:
 
 ```ruby
 TurnKit.default_model = "claude-sonnet-4-5"
@@ -164,18 +214,18 @@ agent = TurnKit::Agent.new(
 
 | Option | Description |
 | --- | --- |
-| `default_model` | Default model for new turns. |
-| `client` | Client adapter for model calls. |
-| `store` | Store for conversations and turns. |
-| `max_iterations` | Maximum model calls per turn. |
-| `timeout` | Maximum seconds per root turn. |
-| `max_depth` | Maximum sub-agent nesting depth. |
-| `max_tool_executions` | Maximum tool calls per root turn. |
-| `cost_limit` | Maximum cost per root turn. |
+| `default_model` | Set the default model. |
+| `client` | Set the model client. |
+| `store` | Set the conversation store. |
+| `max_iterations` | Limit model calls per turn. |
+| `timeout` | Limit seconds per root turn. |
+| `max_depth` | Limit sub-agent nesting. |
+| `max_tool_executions` | Limit tool calls per root turn. |
+| `cost_limit` | Limit cost per root turn. |
 
 ## Contributing
 
-Open bug reports and pull requests on GitHub:
+Report bugs and open pull requests on GitHub:
 
 ```text
 https://github.com/samuelcouch/turnkit

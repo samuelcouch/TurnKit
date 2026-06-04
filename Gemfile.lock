@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    turnkit (0.1.0)
+    turnkit (0.2.0)
       ruby_llm (~> 1.14)
 
 GEM
@@ -73,7 +73,7 @@ CHECKSUMS
   rake (13.4.2)
   ruby_llm (1.14.1)
   ruby_llm-schema (0.3.0)
-  turnkit (0.1.0)
+  turnkit (0.2.0)
   uri (1.1.1)
   zeitwerk (2.8.2)
 

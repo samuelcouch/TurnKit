@@ -12,3 +12,8 @@ TurnKit.tool_execution_record_class = "Turnkit::ToolExecution"
 # TurnKit.timeout = 300
 # TurnKit.max_depth = 3
 # TurnKit.max_tool_executions = 100
+
+# TurnKit builds each system prompt from these sections by default.
+# TurnKit.prompt_sections = %i[agent instructions behavior loaded_skills available_skills tools subject environment]
+# TurnKit.prompt_behavior = "Custom behavior instructions."
+# TurnKit.available_skills = TurnKit::Skill.from_directory(Rails.root.join("app/ai/skills"))

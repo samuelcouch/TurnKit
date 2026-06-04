@@ -2,10 +2,12 @@
 
 module TurnKit
   class Agent
-    attr_reader :name, :description, :model, :instructions, :tools, :skills, :sub_agents
+    attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions
+    attr_reader :prompt_sections, :system_prompt
 
-    def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], sub_agents: [], client: nil, store: nil,
+    def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], available_skills: [], sub_agents: [],
+      system_prompt: nil, prompt_sections: nil, client: nil, store: nil,
       max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil)
       @name = name.to_s
       @description = description.to_s
@@ -13,7 +15,10 @@ module TurnKit
       @instructions = instructions.to_s
       @tools = Array(tools)
       @skills = Array(skills)
+      @available_skills = Array(available_skills)
       @sub_agents = Array(sub_agents)
+      @system_prompt = system_prompt
+      @prompt_sections = prompt_sections
       @client = client
       @store = store
       @max_iterations = max_iterations
@@ -51,6 +56,27 @@ module TurnKit
       tools + sub_agents.map { |agent| SubAgentTool.for(agent) }
     end
 
+    def effective_available_skills
+      (Array(TurnKit.available_skills) + available_skills).uniq { |skill| skill.key }
+    end
+
+    def effective_prompt_sections
+      prompt_sections || TurnKit.prompt_sections
+    end
+
+    def system_prompt_for(turn:, conversation:)
+      prompt = SystemPrompt.new(agent: self, turn: turn, conversation: conversation)
+
+      case system_prompt
+      when nil
+        prompt.to_s
+      when String
+        system_prompt
+      else
+        system_prompt.call(prompt).to_s
+      end
+    end
+
     def build_budget(root_started_at: Clock.now)
       Budget.new(
         max_iterations: max_iterations || TurnKit.max_iterations,
@@ -64,9 +90,7 @@ module TurnKit
 
     def instructions_with_skills
       parts = [ instructions ]
-      skills.each do |skill|
-        parts << "## Skill: #{skill.name}\n\n#{skill.content}"
-      end
+      parts << SystemPrompt.loaded_skills_text(skills)
       parts.reject(&:empty?).join("\n\n")
     end
   end
