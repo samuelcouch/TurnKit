@@ -1,7 +1,7 @@
 # TurnKit
 
 [![Gem Version](https://badge.fury.io/rb/turnkit.svg)](https://rubygems.org/gems/turnkit)
-[![Build](https://github.com/samcouch/turnkit/actions/workflows/ci.yml/badge.svg)](https://github.com/samcouch/turnkit/actions)
+[![Build](https://github.com/samuelcouch/turnkit/actions/workflows/ci.yml/badge.svg)](https://github.com/samuelcouch/turnkit/actions)
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1-red.svg)](https://www.ruby-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.md)
 
@@ -179,7 +179,7 @@ agent = TurnKit::Agent.new(
 Open bug reports and pull requests on GitHub:
 
 ```text
-https://github.com/samcouch/turnkit
+https://github.com/samuelcouch/turnkit
 ```
 
 Run tests:

@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
 
   spec.summary = "Durable Ruby AI agent turns, tools, skills, and conversations."
   spec.description = "TurnKit provides a small Ruby runtime for AI agents with conversations, turns, tool calls, terminal tools, file-based skills, sub-agents, and optional Rails persistence."
-  spec.homepage = "https://github.com/samcouch/turnkit"
+  spec.homepage = "https://github.com/samuelcouch/turnkit"
   spec.license = "MIT"
 
   spec.required_ruby_version = ">= 3.1"
