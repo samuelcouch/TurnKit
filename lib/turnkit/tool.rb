@@ -15,6 +15,11 @@ module TurnKit
         @description.to_s
       end
 
+      def usage_hint(value = nil)
+        @usage_hint = value.to_s if value
+        @usage_hint.to_s
+      end
+
       def parameter(name, type = :string, required: false, description: "", default: nil, enum: nil)
         raise ArgumentError, "unknown parameter type: #{type}" unless TYPES.include?(type)
 

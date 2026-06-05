@@ -18,7 +18,11 @@ class Minitest::Test
     TurnKit.cost_limit = nil
     TurnKit.prompt_sections = TurnKit::SystemPrompt::DEFAULT_SECTIONS.dup
     TurnKit.prompt_behavior = nil
+    TurnKit.prompt_data_max_chars = 20_000
     TurnKit.available_skills = []
+    TurnKit.context_contributors = []
+    TurnKit.system_prompt_contributors = []
+    TurnKit.model_prompt_contributors = {}
   end
 end
 

@@ -88,6 +88,7 @@ Create a tool:
 ```ruby
 class SaveReport < TurnKit::Tool
   description "Save a report."
+  usage_hint "Use when the user asks to persist a report."
   parameter :title, :string, required: true
   parameter :body, :string, required: true
 
@@ -173,6 +174,72 @@ agent = TurnKit::Agent.new(
 )
 ```
 
+Use safe prompt data blocks for pipeline-specific prompts:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "researcher",
+  system_prompt: ->(prompt) {
+    [
+      prompt.section(:agent),
+      prompt.section(:behavior),
+      prompt.untrusted_section(
+        :retrieval_context,
+        ExternalSearch.results_for("turnkit"),
+        label: "Retrieved external evidence."
+      ),
+      prompt.section(:tools),
+      prompt.section(:environment)
+    ].compact.join("\n\n")
+  }
+)
+```
+
+Choose a prompt mode:
+
+```ruby
+TurnKit::Agent.new(name: "main", prompt_mode: :full)    # default sections
+TurnKit::Agent.new(name: "worker", prompt_mode: :minimal) # agent, instructions, behavior, tools, environment
+TurnKit::Agent.new(name: "raw", prompt_mode: :none)     # tiny TurnKit identity prompt
+```
+
+TurnKit automatically uses the minimal prompt mode for delegated sub-agent turns unless the child agent sets its own `prompt_mode`.
+
+Inject live context on each turn:
+
+```ruby
+TurnKit.context_contributors << ->(context) {
+  TurnKit::LiveContextContribution.new(
+    name: "account",
+    content: AccountSummary.for(context.conversation.metadata["account_id"]),
+    trusted: false
+  )
+}
+```
+
+Live context and subject context are rendered below `TurnKit::SystemPrompt::CACHE_BOUNDARY`, so provider adapters can reuse the stable prefix in the future.
+
+Add model-specific prompt guidance:
+
+```ruby
+TurnKit.model_prompt_contributors[/claude/] = ->(context) {
+  TurnKit::PromptContribution.new(
+    stable_prefix: "Provider guidance for #{context.model}.",
+    section_overrides: {
+      behavior: "Be concise, tool-aware, and explicit about uncertainty."
+    }
+  )
+}
+```
+
+Inspect prompt shape without storing raw prompt text:
+
+```ruby
+prompt = TurnKit::SystemPrompt.new(agent: agent, turn: turn, conversation: conversation)
+prompt.report
+# => { "chars" => ..., "hash" => ..., "stable_chars" => ..., "dynamic_chars" => ... }
+```
+
 Delegate to sub-agents:
 
 ```ruby
@@ -253,6 +320,12 @@ turn = conversation.run!(model: "gpt-4.1-mini")
 | `max_depth` | Limit sub-agent nesting. |
 | `max_tool_executions` | Limit tool calls per root turn. |
 | `cost_limit` | Limit cost per root turn. |
+| `prompt_sections` | Set default system prompt sections. |
+| `prompt_behavior` | Override the default behavior section text. |
+| `prompt_data_max_chars` | Limit data-block content rendered into prompts. |
+| `context_contributors` | Add live per-turn prompt context blocks. |
+| `system_prompt_contributors` | Add global prompt prefix/suffix/section overrides. |
+| `model_prompt_contributors` | Add model-matched prompt contributions. |
 
 ## Contributing
 

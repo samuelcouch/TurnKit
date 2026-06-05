@@ -4,10 +4,10 @@ module TurnKit
   class Agent
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions
-    attr_reader :prompt_sections, :system_prompt
+    attr_reader :prompt_sections, :system_prompt, :prompt_mode
 
     def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], available_skills: [], sub_agents: [],
-      system_prompt: nil, prompt_sections: nil, client: nil, store: nil,
+      system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
       max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil)
       @name = name.to_s
       @description = description.to_s
@@ -19,6 +19,7 @@ module TurnKit
       @sub_agents = Array(sub_agents)
       @system_prompt = system_prompt
       @prompt_sections = prompt_sections
+      @prompt_mode = prompt_mode&.to_sym
       @client = client
       @store = store
       @max_iterations = max_iterations
@@ -64,8 +65,14 @@ module TurnKit
       prompt_sections || TurnKit.prompt_sections
     end
 
+    def effective_prompt_mode(turn: nil)
+      return prompt_mode if prompt_mode
+
+      turn&.depth.to_i.positive? ? :minimal : :full
+    end
+
     def system_prompt_for(turn:, conversation:)
-      prompt = SystemPrompt.new(agent: self, turn: turn, conversation: conversation)
+      prompt = SystemPrompt.new(agent: self, turn: turn, conversation: conversation, mode: effective_prompt_mode(turn: turn))
 
       case system_prompt
       when nil

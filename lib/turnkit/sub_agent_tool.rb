@@ -10,6 +10,7 @@ module TurnKit
         @agent = agent
         tool_name agent.name
         description agent.description.empty? ? "Delegate work to #{agent.name}." : agent.description
+        usage_hint "Use when work can be delegated independently to #{agent.name}. Pass a complete task and only relevant context."
 
         class << self
           attr_reader :agent
