@@ -22,11 +22,20 @@ bundle install
 
 ## Quick Start
 
-Set a provider key:
+Set a provider key. TurnKit uses RubyLLM under the hood and defaults to Anthropic Claude:
 
 ```sh
 export ANTHROPIC_API_KEY=...
 ```
+
+| Provider | Env var | Example model |
+| --- | --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-5` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-4.1-mini` |
+| Gemini | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+
+> [!WARNING]
+> TurnKit defaults to `claude-sonnet-4-5`. If `ANTHROPIC_API_KEY` is unset or blank, set `TurnKit.default_model` to a provider you have configured.
 
 Create an agent:
 
@@ -66,6 +75,18 @@ Set an OpenAI model:
 
 ```ruby
 TurnKit.default_model = "gpt-4.1-mini"
+```
+
+Use Gemini:
+
+```sh
+export GEMINI_API_KEY=...
+```
+
+Set a Gemini model:
+
+```ruby
+TurnKit.default_model = "gemini-2.5-flash"
 ```
 
 ### Conversations
@@ -129,6 +150,76 @@ Ask for tool use:
 turn = agent.conversation.ask("Save a short status report.")
 puts turn.output_text
 ```
+
+#### Defining application tools
+
+Tools are classes, not instances. Namespaced tools work fine, and the default tool name comes from the class name: `Assistant::Tools::WebSearch` becomes `web_search`.
+
+```ruby
+module Assistant
+  module Tools
+    class WebSearch < TurnKit::Tool
+      description "Search the web for current information."
+      usage_hint "Use when current external information is needed."
+
+      parameter :objective, :string, required: true
+      parameter :search_queries, :array, required: false
+
+      def call(objective:, search_queries: nil, context:)
+        ParallelClient.new.web_search(
+          objective: objective,
+          search_queries: search_queries
+        )
+      end
+    end
+  end
+end
+```
+
+Register tool classes on the agent:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "researcher",
+  tools: [
+    Assistant::Tools::WebSearch,
+    Assistant::Tools::ReadWebPage
+  ]
+)
+```
+
+#### Tool context
+
+Every tool receives a `context:` object. Use it for logging, correlation, persistence, and domain scoping:
+
+```ruby
+def call(query:, context:)
+  context.turn       # The TurnKit::Turn being run
+  context.execution  # The TurnKit::ToolExecution for this tool call
+
+  { query: query }
+end
+```
+
+If your application already uses a `context:` keyword for something else, use `turnkit_context:` instead:
+
+```ruby
+def call(query:, turnkit_context:)
+  { turn_id: turnkit_context.turn.id, query: query }
+end
+```
+
+#### Tool return values
+
+Prefer returning a `Hash`. TurnKit serializes the normalized value as the tool result:
+
+| Return value | Stored tool result |
+| --- | --- |
+| `Hash` | Keys are stringified. |
+| `Array` | Wrapped as `{ "items" => [...] }`. |
+| Scalar | Wrapped as `{ "result" => value.to_s }`. |
+
+Avoid returning arbitrary objects unless you convert them to a plain Hash or Array first.
 
 ### Skills
 
@@ -295,6 +386,17 @@ Install Rails persistence:
 bin/rails generate turnkit:install
 ```
 
+The installer creates:
+
+- `config/initializers/turnkit.rb`
+- `app/models/turnkit/conversation.rb`
+- `app/models/turnkit/turn.rb`
+- `app/models/turnkit/message.rb`
+- `app/models/turnkit/tool_execution.rb`
+- a migration for TurnKit persistence
+
+The generated migration currently uses `ActiveRecord::Migration[7.1]`. In a newer Rails app, update that version if your app requires it, for example `ActiveRecord::Migration[8.1]`.
+
 Run migrations:
 
 ```sh
@@ -307,10 +409,86 @@ Configure Rails:
 TurnKit.store = TurnKit::ActiveRecordStore.new
 ```
 
+Suggested Rails file layout for your application AI code:
+
+```text
+app/models/assistant/
+  tools/
+    web_search.rb
+    read_web_page.rb
+  skills/
+  prompts/
+```
+
+If you prefer to keep AI infrastructure out of `app/models`, add an autoloaded directory such as:
+
+```text
+app/ai/
+  tools/
+  skills/
+  prompts/
+```
+
 Reconcile stale turns:
 
 ```ruby
 TurnKit.reconcile_stale!
+```
+
+#### Debugging Rails persistence
+
+Inspect the latest persisted turn in a Rails console:
+
+```ruby
+turn = Turnkit::Turn.order(created_at: :desc).first
+turn.status
+turn.error
+turn.output_text
+```
+
+Check whether the model actually called tools:
+
+```ruby
+Turnkit::ToolExecution
+  .where(turn_uid: turn.uid)
+  .order(:created_at)
+  .map { |execution|
+    {
+      name: execution.tool_name,
+      status: execution.status,
+      arguments: execution.arguments,
+      result_keys: execution.result&.keys,
+      error: execution.error
+    }
+  }
+```
+
+#### Live smoke test
+
+Use a model whose provider key is configured, then run a real tool-using turn:
+
+```ruby
+TurnKit.default_model = "gpt-4.1-mini"
+
+agent = TurnKit::Agent.new(
+  name: "researcher",
+  instructions: "Use web_search, then read_web_page, before answering.",
+  tools: [
+    Assistant::Tools::WebSearch,
+    Assistant::Tools::ReadWebPage
+  ]
+)
+
+turn = agent.conversation.ask(
+  "Search for the TurnKit Ruby gem, read the first useful result, then summarize it."
+)
+
+puts turn.output_text
+
+pp Turnkit::ToolExecution
+  .where(turn_uid: turn.id)
+  .order(:created_at)
+  .pluck(:tool_name, :status, :error)
 ```
 
 ## Options
