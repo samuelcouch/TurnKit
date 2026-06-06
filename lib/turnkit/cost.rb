@@ -2,10 +2,10 @@
 
 module TurnKit
   class Cost
-    COMPONENTS = %i[input output cache_read cache_write].freeze
+    COMPONENTS = %i[input output cache_read cache_write thinking].freeze
     PER_MILLION = 1_000_000.0
 
-    attr_reader :input, :output, :cache_read, :cache_write
+    attr_reader :input, :output, :cache_read, :cache_write, :thinking
 
     def self.aggregate(costs)
       costs = costs.compact
@@ -55,6 +55,7 @@ module TurnKit
         output: amount(usage.output_tokens, rates[:output] || rates[:output_per_million]),
         cache_read: amount(usage.cached_tokens, rates[:cache_read] || rates[:cached_input] || rates[:cache_read_input_per_million] || rates[:cached_input_per_million]),
         cache_write: amount(usage.cache_write_tokens, rates[:cache_write] || rates[:cache_creation] || rates[:cache_write_input_per_million] || rates[:cache_creation_input_per_million]),
+        thinking: amount(usage.thinking_tokens, rates[:thinking] || rates[:reasoning] || rates[:thinking_output] || rates[:reasoning_output] || rates[:thinking_output_per_million] || rates[:reasoning_output_per_million]),
         strict: true
       )
     end
@@ -70,7 +71,8 @@ module TurnKit
           input: usage.input_tokens,
           output: usage.output_tokens,
           cached: usage.cached_tokens,
-          cache_creation: usage.cache_write_tokens
+          cache_creation: usage.cache_write_tokens,
+          thinking: usage.thinking_tokens
         )
         from_hash(::RubyLLM::Cost.new(tokens: tokens, model: model_info).to_h)
       else
@@ -92,6 +94,7 @@ module TurnKit
         output: hash[:output],
         cache_read: hash[:cache_read] || hash[:cached_input],
         cache_write: hash[:cache_write] || hash[:cache_creation],
+        thinking: hash[:thinking] || hash[:reasoning] || hash[:thinking_output] || hash[:reasoning_output],
         total: hash[:total]
       )
     end
@@ -119,11 +122,12 @@ module TurnKit
       tokens.to_i * price.to_f / PER_MILLION
     end
 
-    def initialize(input: nil, output: nil, cache_read: nil, cache_write: nil, total: nil, strict: false)
+    def initialize(input: nil, output: nil, cache_read: nil, cache_write: nil, thinking: nil, total: nil, strict: false)
       @input = number(input)
       @output = number(output)
       @cache_read = number(cache_read)
       @cache_write = number(cache_write)
+      @thinking = number(thinking)
       @total = number(total)
       @strict = strict
     end
@@ -142,6 +146,7 @@ module TurnKit
         "output" => output,
         "cache_read" => cache_read,
         "cache_write" => cache_write,
+        "thinking" => thinking,
         "total" => total
       }.compact
     end

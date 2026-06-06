@@ -89,6 +89,40 @@ Set a Gemini model:
 TurnKit.default_model = "gemini-2.5-flash"
 ```
 
+### Thinking
+
+Enable provider reasoning or extended thinking per agent:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "reasoner",
+  model: "claude-sonnet-4-5",
+  thinking: { budget: 4_000 }
+)
+```
+
+Use effort-based thinking for providers that support it:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "reasoner",
+  model: "gemini-2.5-flash",
+  thinking: { effort: :high }
+)
+```
+
+Override or disable thinking for one turn:
+
+```ruby
+conversation = agent.conversation
+conversation.ask("Solve this carefully.", thinking: { budget: 8_000 })
+conversation.ask("Answer quickly.", thinking: nil)
+```
+
+TurnKit passes `thinking` to RubyLLM as `{ effort:, budget: }`. Anthropic requires `budget`; Gemini and OpenRouter can use `effort`, `budget`, or both depending on the model.
+
+When the provider reports reasoning usage, TurnKit records it as `thinking_tokens` and includes it in usage totals and cost calculation.
+
 ### Conversations
 
 Create a conversation:
@@ -351,7 +385,7 @@ Create a client:
 
 ```ruby
 class MyClient < TurnKit::Client
-  def chat(model:, messages:, tools:, instructions:, temperature: nil, metadata: nil)
+  def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, metadata: nil)
     TurnKit::Result.new(
       text: "provider response",
       model: model,
@@ -515,7 +549,8 @@ agent = TurnKit::Agent.new(
   model: "gpt-4.1-mini",
   max_iterations: 10,
   timeout: 60,
-  cost_limit: 0.25
+  cost_limit: 0.25,
+  thinking: { effort: :low }
 )
 ```
 
@@ -528,6 +563,7 @@ agent = TurnKit::Agent.new(
 | `timeout` | Limit seconds per root turn. |
 | `max_tool_executions` | Limit tool calls per root turn. |
 | `cost_limit` | Limit cost per root turn. |
+| `thinking` | Configure provider reasoning or extended thinking per agent. |
 | `cost_rates` | Override prices by model. |
 | `cost_calculator` | Override cost calculation. |
 | `prompt_cache` | Use provider prompt caching. |

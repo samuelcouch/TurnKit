@@ -4,11 +4,11 @@ module TurnKit
   class Agent
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions
-    attr_reader :prompt_sections, :system_prompt, :prompt_mode
+    attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking
 
     def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], available_skills: [], sub_agents: [],
       system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
-      max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil)
+      max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil, thinking: nil)
       @name = name.to_s
       @description = description.to_s
       @model = model
@@ -27,7 +27,23 @@ module TurnKit
       @cost_limit = cost_limit
       @max_depth = max_depth
       @max_tool_executions = max_tool_executions
+      @thinking = self.class.normalize_thinking(thinking)
       raise ArgumentError, "name is required" if @name.empty?
+    end
+
+    def self.normalize_thinking(value)
+      return nil if value.nil?
+
+      attrs = value.respond_to?(:to_h) ? value.to_h : value
+      raise ArgumentError, "thinking must be a hash" unless attrs.is_a?(Hash)
+
+      attrs = attrs.transform_keys(&:to_sym)
+      unknown = attrs.keys - %i[effort budget]
+      raise ArgumentError, "unknown thinking attributes: #{unknown.join(", ")}" if unknown.any?
+      raise ArgumentError, "thinking requires :effort or :budget" if attrs[:effort].nil? && attrs[:budget].nil?
+      raise ArgumentError, "thinking budget must be an Integer" if attrs[:budget] && !attrs[:budget].is_a?(Integer)
+
+      attrs.slice(:effort, :budget).compact
     end
 
     def conversation(model: nil, subject: nil, metadata: {})
@@ -51,6 +67,10 @@ module TurnKit
 
     def effective_model
       model || TurnKit.default_model
+    end
+
+    def effective_thinking
+      thinking
     end
 
     def effective_client

@@ -6,7 +6,7 @@ module TurnKit
 
     attr_reader :agent, :conversation, :store, :budget, :depth
     attr_reader :id, :conversation_id, :agent_name, :parent_turn_id, :parent_tool_execution_id
-    attr_reader :root_turn_id, :context_message_sequence, :model
+    attr_reader :root_turn_id, :context_message_sequence, :model, :thinking
     attr_reader :started_at
 
     def initialize(agent:, conversation:, record:, store:, budget: nil, depth: 0)
@@ -22,6 +22,7 @@ module TurnKit
       @root_turn_id = @record["root_turn_id"] || id
       @context_message_sequence = @record["context_message_sequence"].to_i
       @model = @record["model"] || agent.effective_model
+      @thinking = thinking_from_options
       @started_at = @record["started_at"]
       @budget = budget || agent.build_budget
       @depth = depth
@@ -40,6 +41,7 @@ module TurnKit
           messages: llm_messages,
           tools: agent.effective_tools,
           instructions: agent.system_prompt_for(turn: self, conversation: conversation),
+          thinking: thinking,
           metadata: { turn_id: id, conversation_id: conversation.id }
         )
         result_cost = Cost.from_usage(result.usage, model: result.model || model)
@@ -94,6 +96,7 @@ module TurnKit
 
     def reload
       @record = store.load_turn(id)
+      @thinking = thinking_from_options
       self
     end
 
@@ -104,6 +107,13 @@ module TurnKit
     private
       def llm_messages
         MessageProjection.for(conversation.messages_for_turn(self))
+      end
+
+      def thinking_from_options
+        options = (@record["options"] || {}).transform_keys(&:to_s)
+        return Agent.normalize_thinking(options["thinking"]) if options.key?("thinking")
+
+        agent.effective_thinking
       end
 
       def persist_assistant_message(result)
@@ -133,6 +143,7 @@ module TurnKit
           "output_tokens" => current["output_tokens"].to_i + usage.output_tokens,
           "cached_tokens" => current["cached_tokens"].to_i + usage.cached_tokens,
           "cache_write_tokens" => current["cache_write_tokens"].to_i + usage.cache_write_tokens,
+          "thinking_tokens" => current["thinking_tokens"].to_i + usage.thinking_tokens,
           "total_tokens" => current["total_tokens"].to_i + usage.total_tokens
         }
         totals["cost_details"] = aggregate_cost(current["cost_details"], cost).to_h if cost&.total

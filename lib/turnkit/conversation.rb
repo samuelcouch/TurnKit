@@ -2,6 +2,8 @@
 
 module TurnKit
   class Conversation
+    THINKING_UNSET = Object.new.freeze
+
     attr_reader :agent, :id, :store, :model, :subject, :metadata
 
     def initialize(agent:, record:, store:, model:, subject: nil, metadata: {})
@@ -24,12 +26,15 @@ module TurnKit
       async ? turn : turn.run!
     end
 
-    def run!(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent)
-      build_turn(trigger_message_id: trigger_message_id, model: model, budget: budget, parent_turn: parent_turn, parent_tool_execution: parent_tool_execution, depth: depth, agent: agent).run!
+    def run!(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET)
+      build_turn(trigger_message_id: trigger_message_id, model: model, budget: budget, parent_turn: parent_turn, parent_tool_execution: parent_tool_execution, depth: depth, agent: agent, thinking: thinking).run!
     end
 
-    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent)
+    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET)
       snapshot = latest_message_sequence
+      effective_thinking = thinking.equal?(THINKING_UNSET) ? agent.effective_thinking : Agent.normalize_thinking(thinking)
+      options = { "trigger_message_id" => trigger_message_id }.compact
+      options["thinking"] = effective_thinking
       record = store.create_turn(
         "conversation_id" => id,
         "agent_name" => agent.name,
@@ -39,7 +44,7 @@ module TurnKit
         "context_message_sequence" => snapshot,
         "status" => "pending",
         "model" => model || self.model || agent.effective_model,
-        "options" => { "trigger_message_id" => trigger_message_id }.compact
+        "options" => options
       )
       Turn.new(agent: agent, conversation: self, record: record, store: store, budget: budget, depth: depth)
     end

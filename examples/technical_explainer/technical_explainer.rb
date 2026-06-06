@@ -34,6 +34,11 @@ else
   TurnKit.default_model
 end
 
+thinking = {}
+thinking[:effort] = ENV["TURNKIT_THINKING_EFFORT"] unless ENV.fetch("TURNKIT_THINKING_EFFORT", "").empty?
+thinking[:budget] = Integer(ENV["TURNKIT_THINKING_BUDGET"]) unless ENV.fetch("TURNKIT_THINKING_BUDGET", "").empty?
+thinking = nil if thinking.empty?
+
 TurnKit.context_contributors << ->(_context) {
   TechnicalExplainer::StoreContext.new(TechnicalExplainer.store).to_live_context
 }
@@ -62,6 +67,7 @@ agent = TurnKit::Agent.new(
   description: "Turns technical source material into practical implementation briefs.",
   instructions: prompt_files.instructions,
   system_prompt: ->(prompt) { prompt_files.system_prompt(prompt) },
+  thinking: thinking,
   skills: skills,
   tools: [
     TechnicalExplainer::Tools::ParallelWebSearch,

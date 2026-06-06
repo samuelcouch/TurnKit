@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5 - 2026-06-06
+
+- Add per-agent and per-turn provider thinking configuration.
+
 ## 0.2.4 - 2026-06-06
 
 - Add Anthropic prompt cache support for stable system prompt sections.

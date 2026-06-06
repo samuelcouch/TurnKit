@@ -2,7 +2,7 @@
 
 module TurnKit
   class Usage
-    attr_reader :input_tokens, :output_tokens, :cached_tokens, :cache_write_tokens, :cost
+    attr_reader :input_tokens, :output_tokens, :cached_tokens, :cache_write_tokens, :thinking_tokens, :cost
 
     def self.aggregate(usages)
       usages = usages.compact
@@ -13,6 +13,7 @@ module TurnKit
         output_tokens: usages.sum(&:output_tokens),
         cached_tokens: usages.sum(&:cached_tokens),
         cache_write_tokens: usages.sum(&:cache_write_tokens),
+        thinking_tokens: usages.sum(&:thinking_tokens),
         cost: cost
       )
     end
@@ -29,20 +30,22 @@ module TurnKit
         output_tokens: attrs["output_tokens"],
         cached_tokens: attrs["cached_tokens"],
         cache_write_tokens: attrs["cache_write_tokens"],
+        thinking_tokens: attrs["thinking_tokens"] || attrs["reasoning_tokens"],
         cost: cost
       )
     end
 
-    def initialize(input_tokens: 0, output_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, cost: nil)
+    def initialize(input_tokens: 0, output_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, thinking_tokens: 0, cost: nil)
       @input_tokens = input_tokens.to_i
       @output_tokens = output_tokens.to_i
       @cached_tokens = cached_tokens.to_i
       @cache_write_tokens = cache_write_tokens.to_i
+      @thinking_tokens = thinking_tokens.to_i
       @cost = cost
     end
 
     def total_tokens
-      input_tokens + output_tokens + cached_tokens + cache_write_tokens
+      input_tokens + output_tokens + cached_tokens + cache_write_tokens + thinking_tokens
     end
 
     def to_h
@@ -51,6 +54,7 @@ module TurnKit
         "output_tokens" => output_tokens,
         "cached_tokens" => cached_tokens,
         "cache_write_tokens" => cache_write_tokens,
+        "thinking_tokens" => thinking_tokens,
         "total_tokens" => total_tokens,
         "cost" => cost
       }.compact

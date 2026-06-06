@@ -37,8 +37,8 @@ class FakeClient < TurnKit::Client
     @calls = []
   end
 
-  def chat(model:, messages:, tools:, instructions:, temperature: nil, metadata: nil)
-    @calls << { model: model, messages: messages, tools: tools, instructions: instructions, metadata: metadata }
+  def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, metadata: nil)
+    @calls << { model: model, messages: messages, tools: tools, instructions: instructions, thinking: thinking, metadata: metadata }
     @results.shift || TurnKit::Result.new(text: "done", model: model)
   end
 end

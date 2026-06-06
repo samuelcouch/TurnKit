@@ -3,7 +3,7 @@
 module TurnKit
   module Adapters
     class RubyLLM < Client
-      def chat(model:, messages:, tools:, instructions:, temperature: nil, metadata: nil)
+      def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, metadata: nil)
         require "ruby_llm"
 
         configure_from_environment
@@ -11,6 +11,7 @@ module TurnKit
         chat = ::RubyLLM.chat(model: model)
         add_instructions(chat, instructions, model: model)
         chat.with_temperature(temperature) if temperature
+        apply_thinking(chat, thinking)
         Array(tools).each { |tool| chat.with_tool(ruby_llm_tool(tool)) }
         Array(messages).each { |message| add_message(chat, message) }
 
@@ -25,6 +26,11 @@ module TurnKit
           config.gemini_api_key ||= ENV["GEMINI_API_KEY"]
           config.anthropic_api_key ||= ENV["ANTHROPIC_API_KEY"]
           config.openrouter_api_key ||= ENV["OPENROUTER_API_KEY"]
+        end
+
+        def apply_thinking(chat, thinking)
+          thinking = Agent.normalize_thinking(thinking)
+          chat.with_thinking(**thinking) if thinking
         end
 
         def complete_without_tool_execution(chat)
@@ -123,6 +129,7 @@ module TurnKit
             output_tokens: token_value(response, :output_tokens),
             cached_tokens: token_value(response, :cached_tokens),
             cache_write_tokens: token_value(response, :cache_creation_tokens),
+            thinking_tokens: thinking_token_value(response),
             cost: response_cost(response)
           )
           Result.new(
@@ -135,6 +142,10 @@ module TurnKit
 
         def token_value(response, method)
           response.respond_to?(method) ? response.public_send(method).to_i : 0
+        end
+
+        def thinking_token_value(response)
+          token_value(response, :thinking_tokens).nonzero? || token_value(response, :reasoning_tokens)
         end
 
         def response_cost(response)

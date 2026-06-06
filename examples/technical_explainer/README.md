@@ -34,6 +34,15 @@ Optionally choose a model:
 export TURNKIT_MODEL=claude-sonnet-4-5
 ```
 
+Optionally enable provider thinking for models that support it:
+
+```sh
+export TURNKIT_MODEL=gpt-5-mini
+export TURNKIT_THINKING_EFFORT=low
+# or, for providers such as Anthropic:
+export TURNKIT_THINKING_BUDGET=4000
+```
+
 ## Run
 
 ```sh

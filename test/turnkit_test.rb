@@ -87,11 +87,54 @@ class TurnKitTest < Minitest::Test
     assert_equal [ :user ], client.calls.first.fetch(:messages).map { |message| message.fetch(:role) }
   end
 
-  def test_usage_tracks_cache_write_tokens
-    usage = TurnKit::Usage.new(input_tokens: 2, output_tokens: 3, cached_tokens: 5, cache_write_tokens: 7)
+  def test_agent_thinking_is_passed_to_client_and_persisted_on_turn
+    client = FakeClient.new(TurnKit::Result.new(text: "hello"))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", thinking: { "budget" => 4_000 }, client: client)
 
-    assert_equal 17, usage.total_tokens
+    turn = agent.conversation.ask("Hi")
+    record = TurnKit.store.load_turn(turn.id)
+
+    assert_equal({ budget: 4_000 }, agent.thinking)
+    assert_equal({ budget: 4_000 }, turn.thinking)
+    assert_equal({ budget: 4_000 }, client.calls.first.fetch(:thinking))
+    assert_equal({ budget: 4_000 }, record.fetch("options").fetch("thinking"))
+  end
+
+  def test_turn_thinking_overrides_agent_thinking
+    client = FakeClient.new(TurnKit::Result.new(text: "hello"))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", thinking: { budget: 4_000 }, client: client)
+
+    turn = agent.conversation.ask("Hi", thinking: { effort: :high })
+
+    assert_equal({ effort: :high }, turn.thinking)
+    assert_equal({ effort: :high }, client.calls.first.fetch(:thinking))
+  end
+
+  def test_turn_thinking_can_disable_agent_thinking
+    client = FakeClient.new(TurnKit::Result.new(text: "hello"))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", thinking: { budget: 4_000 }, client: client)
+
+    turn = agent.conversation.ask("Hi", thinking: nil)
+
+    assert_nil turn.thinking
+    assert_nil client.calls.first.fetch(:thinking)
+    assert_nil TurnKit.store.load_turn(turn.id).fetch("options").fetch("thinking")
+  end
+
+  def test_agent_rejects_empty_thinking_config
+    error = assert_raises(ArgumentError) do
+      TurnKit::Agent.new(name: "helper", thinking: {})
+    end
+
+    assert_includes error.message, "thinking requires"
+  end
+
+  def test_usage_tracks_cache_write_and_thinking_tokens
+    usage = TurnKit::Usage.new(input_tokens: 2, output_tokens: 3, cached_tokens: 5, cache_write_tokens: 7, thinking_tokens: 11)
+
+    assert_equal 28, usage.total_tokens
     assert_equal 7, usage.to_h.fetch("cache_write_tokens")
+    assert_equal 11, usage.to_h.fetch("thinking_tokens")
   end
 
   def test_turn_aggregates_cache_write_tokens_and_cost
@@ -128,7 +171,19 @@ class TurnKitTest < Minitest::Test
     assert_equal 1_800_000, turn.usage.total_tokens
     assert_equal 1_800_000, conversation.usage.total_tokens
     assert_equal 1_800_000, agent.usage.total_tokens
-    assert_equal({ "input" => 1.0, "output" => 1.0, "cache_read" => 0.01, "cache_write" => 0.25, "total" => 2.26 }, record.fetch("usage").fetch("cost_details"))
+    assert_equal({ "input" => 1.0, "output" => 1.0, "cache_read" => 0.01, "cache_write" => 0.25, "thinking" => 0.0, "total" => 2.26 }, record.fetch("usage").fetch("cost_details"))
+  end
+
+  def test_cost_is_calculated_from_thinking_token_rates
+    TurnKit.cost_rates = { "model-a" => { input: 1.00, output: 1.00, thinking: 3.00 } }
+    client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 1_000_000, output_tokens: 1_000_000, thinking_tokens: 500_000)))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client)
+
+    turn = agent.conversation.ask("Hi")
+
+    assert_equal 2_500_000, turn.usage.total_tokens
+    assert_equal 0.5, turn.usage.thinking_tokens / 1_000_000.0
+    assert_equal 3.5, turn.cost.total
   end
 
   def test_cost_calculator_can_override_pricing
@@ -604,6 +659,24 @@ class TurnKitTest < Minitest::Test
     RubyLLM.config.gemini_api_key = original_gemini_key if defined?(RubyLLM)
     ENV["OPENAI_API_KEY"] = original_env_openai_key
     ENV["GEMINI_API_KEY"] = original_env_gemini_key
+  end
+
+  def test_ruby_llm_adapter_applies_thinking_config
+    require "ruby_llm"
+
+    adapter = TurnKit::Adapters::RubyLLM.new
+    chat = Class.new do
+      attr_reader :thinking
+
+      def with_thinking(**thinking)
+        @thinking = RubyLLM::Thinking::Config.new(**thinking)
+      end
+    end.new
+
+    adapter.send(:apply_thinking, chat, { "effort" => :high, "budget" => 4_000 })
+
+    assert_equal "high", chat.thinking.effort
+    assert_equal 4_000, chat.thinking.budget
   end
 
   def test_ruby_llm_adapter_preserves_tool_messages
