@@ -48,6 +48,14 @@ module TurnKit
       store.list_messages(id).map { |attrs| Message.new(attrs) }
     end
 
+    def usage
+      Usage.from_records(store.list_turns(conversation_id: id))
+    end
+
+    def cost
+      Cost.from_records(store.list_turns(conversation_id: id))
+    end
+
     def messages_for_turn(turn)
       store.list_messages(id, through_sequence: turn.context_message_sequence, turn_id: turn.id).map { |attrs| Message.new(attrs) }
     end

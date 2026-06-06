@@ -42,9 +42,10 @@ module TurnKit
           instructions: agent.system_prompt_for(turn: self, conversation: conversation),
           metadata: { turn_id: id, conversation_id: conversation.id }
         )
+        result_cost = Cost.from_usage(result.usage, model: result.model || model)
 
-        budget.add_usage!(result.usage)
-        add_usage!(result.usage)
+        budget.add_cost!(result_cost.total)
+        add_usage!(result.usage, cost: result_cost)
         persist_assistant_message(result)
 
         if result.tool_calls?
@@ -77,6 +78,14 @@ module TurnKit
 
     def output_text
       @record["output_text"].to_s
+    end
+
+    def usage
+      Usage.from_h(@record["usage"] || {})
+    end
+
+    def cost
+      Cost.from_record(@record)
     end
 
     def tool_executions
@@ -117,7 +126,7 @@ module TurnKit
         update!(status: "completed", output_text: message, completed_at: Clock.now)
       end
 
-      def add_usage!(usage)
+      def add_usage!(usage, cost: nil)
         current = @record["usage"] || {}
         totals = {
           "input_tokens" => current["input_tokens"].to_i + usage.input_tokens,
@@ -126,9 +135,16 @@ module TurnKit
           "cache_write_tokens" => current["cache_write_tokens"].to_i + usage.cache_write_tokens,
           "total_tokens" => current["total_tokens"].to_i + usage.total_tokens
         }
+        totals["cost_details"] = aggregate_cost(current["cost_details"], cost).to_h if cost&.total
         attributes = { usage: totals, heartbeat_at: Clock.now }
-        attributes[:cost] = @record["cost"].to_f + usage.cost.to_f if usage.cost
+        attributes[:cost] = @record["cost"].to_f + cost.total if cost&.total
         update!(attributes)
+      end
+
+      def aggregate_cost(current, cost)
+        return cost unless current
+
+        Cost.aggregate([ Cost.from_hash(current), cost ])
       end
 
       def update!(attributes)

@@ -122,7 +122,8 @@ module TurnKit
             input_tokens: token_value(response, :input_tokens),
             output_tokens: token_value(response, :output_tokens),
             cached_tokens: token_value(response, :cached_tokens),
-            cache_write_tokens: token_value(response, :cache_creation_tokens)
+            cache_write_tokens: token_value(response, :cache_creation_tokens),
+            cost: response_cost(response)
           )
           Result.new(
             text: response.respond_to?(:content) ? response.content.to_s : response.to_s,
@@ -134,6 +135,12 @@ module TurnKit
 
         def token_value(response, method)
           response.respond_to?(method) ? response.public_send(method).to_i : 0
+        end
+
+        def response_cost(response)
+          return unless response.respond_to?(:cost)
+
+          response.cost&.total
         end
     end
   end

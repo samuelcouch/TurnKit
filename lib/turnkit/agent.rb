@@ -41,6 +41,14 @@ module TurnKit
       Conversation.new(agent: self, record: record, store: store, model: model || effective_model, subject: subject, metadata: metadata)
     end
 
+    def cost
+      Cost.from_records(effective_store.list_turns(agent_name: name))
+    end
+
+    def usage
+      Usage.from_records(effective_store.list_turns(agent_name: name))
+    end
+
     def effective_model
       model || TurnKit.default_model
     end

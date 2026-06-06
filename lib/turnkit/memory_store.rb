@@ -68,11 +68,12 @@ module TurnKit
       end
     end
 
-    def list_turns(root_turn_id: nil, conversation_id: nil)
+    def list_turns(root_turn_id: nil, conversation_id: nil, agent_name: nil)
       @mutex.synchronize do
         rows = @turns.values
         rows = rows.select { |turn| turn["root_turn_id"] == root_turn_id } if root_turn_id
         rows = rows.select { |turn| turn["conversation_id"] == conversation_id } if conversation_id
+        rows = rows.select { |turn| turn["agent_name"] == agent_name } if agent_name
         rows.sort_by { |turn| [ turn["created_at"].to_f, turn["id"] ] }.map { |turn| duplicate(turn) }
       end
     end

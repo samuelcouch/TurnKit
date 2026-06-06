@@ -32,10 +32,14 @@ module TurnKit
     end
 
     def add_usage!(usage)
-      return unless usage&.cost && cost_limit
+      add_cost!(usage&.cost)
+    end
+
+    def add_cost!(cost)
+      return unless cost && cost_limit
 
       @mutex.synchronize do
-        @cost += usage.cost.to_f
+        @cost += cost.to_f
         raise Error, "cost limit reached" if @cost > cost_limit
       end
     end

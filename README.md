@@ -37,14 +37,20 @@ agent = TurnKit::Agent.new(
   name: "helper",
   instructions: "Answer briefly."
 )
+```
 
+Ask a question:
+
+```ruby
 turn = agent.conversation.ask("Explain Ruby blocks in one sentence.")
 puts turn.output_text
 ```
 
 ## Usage
 
-Choose a model:
+### Models
+
+Set the default model:
 
 ```ruby
 TurnKit.default_model = "claude-sonnet-4-5"
@@ -56,9 +62,13 @@ Use OpenAI:
 export OPENAI_API_KEY=...
 ```
 
+Set an OpenAI model:
+
 ```ruby
 TurnKit.default_model = "gpt-4.1-mini"
 ```
+
+### Conversations
 
 Create a conversation:
 
@@ -67,13 +77,23 @@ agent = TurnKit::Agent.new(
   name: "writer",
   instructions: "Write clear release notes."
 )
+```
 
+Add context:
+
+```ruby
 conversation = agent.conversation(subject: "v1 launch")
 conversation.say("Mention faster tool execution.")
+```
 
+Run the agent:
+
+```ruby
 turn = conversation.run!
 puts turn.output_text
 ```
+
+### Tools
 
 Create a tool:
 
@@ -93,7 +113,7 @@ class SaveReport < TurnKit::Tool
 end
 ```
 
-Use a tool:
+Use the tool:
 
 ```ruby
 agent = TurnKit::Agent.new(
@@ -101,40 +121,115 @@ agent = TurnKit::Agent.new(
   instructions: "Save reports when asked.",
   tools: [SaveReport]
 )
+```
 
+Ask for tool use:
+
+```ruby
 turn = agent.conversation.ask("Save a short status report.")
 puts turn.output_text
 ```
 
-Add skills:
+### Skills
+
+Load a skill:
 
 ```ruby
 skill = TurnKit::Skill.from_file("skills/research.md")
+```
 
+Use the skill:
+
+```ruby
 agent = TurnKit::Agent.new(
   name: "researcher",
   skills: [skill]
 )
 ```
 
-Delegate to sub-agents:
+### Sub-agents
+
+Create a sub-agent:
 
 ```ruby
 writer = TurnKit::Agent.new(
   name: "writer",
   description: "Draft concise copy."
 )
+```
 
+Delegate to it:
+
+```ruby
 editor = TurnKit::Agent.new(
   name: "editor",
   sub_agents: [writer]
 )
+```
 
+Ask the parent agent:
+
+```ruby
 turn = editor.conversation.ask("Ask the writer for three headlines.")
 puts turn.output_text
 ```
 
-Use prompt caching:
+### Usage and costs
+
+Inspect token usage:
+
+```ruby
+turn.usage.total_tokens
+conversation.usage.total_tokens
+agent.usage.total_tokens
+```
+
+Inspect costs:
+
+```ruby
+turn.cost.total
+conversation.cost.total
+agent.cost.total
+```
+
+Use RubyLLM registry prices by default.
+
+Override model rates:
+
+```ruby
+TurnKit.cost_rates = {
+  "my-model" => {
+    input: 0.25,
+    output: 1.00,
+    cached_input: 0.05,
+    cache_creation: 0.25
+  }
+}
+```
+
+Override cost calculation:
+
+```ruby
+TurnKit.cost_calculator = ->(usage, model) do
+  {
+    input: usage.input_tokens * 0.25 / 1_000_000.0,
+    output: usage.output_tokens * 1.00 / 1_000_000.0
+  }
+end
+```
+
+Limit turn cost:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "analyst",
+  cost_limit: 0.25
+)
+```
+
+### Prompt caching
+
+Enable prompt caching:
 
 ```ruby
 TurnKit.prompt_cache = :auto
@@ -159,14 +254,9 @@ agent = TurnKit::Agent.new(
 )
 ```
 
-Inspect usage:
+### Custom clients
 
-```ruby
-record = TurnKit.store.load_turn(turn.id)
-record.fetch("usage")
-```
-
-Return usage from custom clients:
+Create a client:
 
 ```ruby
 class MyClient < TurnKit::Client
@@ -185,21 +275,19 @@ class MyClient < TurnKit::Client
 end
 ```
 
-Split instructions inside custom clients:
+Use the client:
+
+```ruby
+TurnKit.client = MyClient.new
+```
+
+Split cache sections:
 
 ```ruby
 stable, dynamic = TurnKit::SystemPrompt.split_cache_boundary(instructions)
 ```
 
-Send `stable` with provider cache controls.
-
-Send `dynamic` as normal prompt content.
-
-Use a custom client:
-
-```ruby
-TurnKit.client = MyClient.new
-```
+### Rails
 
 Install Rails persistence:
 
@@ -217,7 +305,6 @@ Configure Rails:
 
 ```ruby
 TurnKit.store = TurnKit::ActiveRecordStore.new
-TurnKit.default_model = "claude-sonnet-4-5"
 ```
 
 Reconcile stale turns:
@@ -237,6 +324,8 @@ TurnKit.timeout = 300
 TurnKit.max_depth = 3
 TurnKit.max_tool_executions = 100
 TurnKit.cost_limit = nil
+TurnKit.cost_rates = {}
+TurnKit.cost_calculator = nil
 TurnKit.prompt_cache = :auto
 ```
 
@@ -259,11 +348,11 @@ agent = TurnKit::Agent.new(
 | `store` | Set the conversation store. |
 | `max_iterations` | Limit model calls per turn. |
 | `timeout` | Limit seconds per root turn. |
-| `max_depth` | Limit sub-agent nesting. |
 | `max_tool_executions` | Limit tool calls per root turn. |
 | `cost_limit` | Limit cost per root turn. |
+| `cost_rates` | Override prices by model. |
+| `cost_calculator` | Override cost calculation. |
 | `prompt_cache` | Use provider prompt caching. |
-| `prompt_sections` | Set default prompt sections. |
 
 ## Contributing
 

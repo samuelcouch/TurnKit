@@ -89,10 +89,11 @@ module TurnKit
       turn_hash(record)
     end
 
-    def list_turns(root_turn_id: nil, conversation_id: nil)
+    def list_turns(root_turn_id: nil, conversation_id: nil, agent_name: nil)
       scope = turn_class.all
       scope = scope.where(root_turn_uid: root_turn_id) if root_turn_id
       scope = scope.where(conversation_uid: conversation_id) if conversation_id
+      scope = scope.where(agent_name: agent_name) if agent_name
       scope.order(:created_at, :uid).map { |record| turn_hash(record) }
     end
 

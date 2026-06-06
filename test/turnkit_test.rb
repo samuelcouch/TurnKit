@@ -106,6 +106,52 @@ class TurnKitTest < Minitest::Test
     assert_equal 0.01, record.fetch("cost")
   end
 
+  def test_cost_is_calculated_from_model_rates
+    TurnKit.cost_rates = {
+      "model-a" => {
+        input: 1.00,
+        output: 2.00,
+        cached_input: 0.10,
+        cache_creation: 1.25
+      }
+    }
+    client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 1_000_000, output_tokens: 500_000, cached_tokens: 100_000, cache_write_tokens: 200_000)))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client)
+    conversation = agent.conversation
+
+    turn = conversation.ask("Hi")
+    record = TurnKit.store.load_turn(turn.id)
+
+    assert_equal 2.26, turn.cost.total
+    assert_equal 2.26, conversation.cost.total
+    assert_equal 2.26, agent.cost.total
+    assert_equal 1_800_000, turn.usage.total_tokens
+    assert_equal 1_800_000, conversation.usage.total_tokens
+    assert_equal 1_800_000, agent.usage.total_tokens
+    assert_equal({ "input" => 1.0, "output" => 1.0, "cache_read" => 0.01, "cache_write" => 0.25, "total" => 2.26 }, record.fetch("usage").fetch("cost_details"))
+  end
+
+  def test_cost_calculator_can_override_pricing
+    TurnKit.cost_calculator = ->(usage, model) { { input: usage.input_tokens * 0.001, output: model == "model-a" ? 0.25 : 0 } }
+    client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 2, output_tokens: 3)))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client)
+
+    turn = agent.conversation.ask("Hi")
+
+    assert_equal 0.252, turn.cost.total
+  end
+
+  def test_cost_limit_uses_calculated_cost
+    TurnKit.cost_rates = { "model-a" => { input: 1.00, output: 1.00 } }
+    client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 1_000_000)))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client, cost_limit: 0.50)
+
+    turn = agent.conversation.ask("Hi")
+
+    assert turn.failed?
+    assert_equal "cost limit reached", TurnKit.store.load_turn(turn.id).fetch("error").fetch("message")
+  end
+
   def test_default_system_prompt_includes_agent_context_tools_skills_subject_and_environment
     skill = TurnKit::Skill.new(key: "research", name: "Research", description: "Use sources.", content: "Verify claims.")
     available = TurnKit::Skill.new(key: "writer", name: "Writer", description: "Draft prose.", content: "Write clearly.")

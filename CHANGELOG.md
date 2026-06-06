@@ -1,9 +1,10 @@
 # Changelog
 
-## 0.2.3 - 2026-06-06
+## 0.2.4 - 2026-06-06
 
 - Add Anthropic prompt cache support for stable system prompt sections.
-- Track cache write tokens and aggregate model costs on turns.
+- Track cache write tokens and expose model cost totals for turns, conversations, and agents.
+- Calculate costs from RubyLLM model registry pricing with custom rate and calculator overrides.
 - Refresh README usage examples for prompt caching and usage tracking.
 
 ## 0.2.0 - 2026-06-04
