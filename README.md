@@ -26,33 +26,9 @@ Set a provider key:
 
 ```sh
 export ANTHROPIC_API_KEY=...
-# or OPENAI_API_KEY=..., GEMINI_API_KEY=..., OPENROUTER_API_KEY=...
 ```
 
-TurnKit uses RubyLLM by default. Choose the provider by choosing a RubyLLM model name:
-
-```ruby
-TurnKit.default_model = "claude-sonnet-4-5" # Anthropic
-# TurnKit.default_model = "gpt-4.1-mini"    # OpenAI
-# TurnKit.default_model = "gemini-2.5-flash" # Gemini
-```
-
-You can also override the model per agent or per run.
-
-To use a different model SDK, provide a client object that responds to `chat`:
-
-```ruby
-class MyClient < TurnKit::Client
-  def chat(model:, messages:, tools:, instructions:, temperature: nil, metadata: nil)
-    # Call your provider here.
-    TurnKit::Result.new(text: "provider response", model: model)
-  end
-end
-
-TurnKit.client = MyClient.new
-```
-
-Ask an agent:
+Create an agent:
 
 ```ruby
 require "turnkit"
@@ -67,6 +43,22 @@ puts turn.output_text
 ```
 
 ## Usage
+
+Choose a model:
+
+```ruby
+TurnKit.default_model = "claude-sonnet-4-5"
+```
+
+Use OpenAI:
+
+```sh
+export OPENAI_API_KEY=...
+```
+
+```ruby
+TurnKit.default_model = "gpt-4.1-mini"
+```
 
 Create a conversation:
 
@@ -101,7 +93,7 @@ class SaveReport < TurnKit::Tool
 end
 ```
 
-Use the tool:
+Use a tool:
 
 ```ruby
 agent = TurnKit::Agent.new(
@@ -125,121 +117,6 @@ agent = TurnKit::Agent.new(
 )
 ```
 
-List available skills:
-
-```ruby
-research = TurnKit::Skill.from_file(
-  "skills/research.md",
-  description: "Use for source-backed research tasks."
-)
-
-agent = TurnKit::Agent.new(
-  name: "researcher",
-  instructions: "Prefer primary sources.",
-  tools: [WebSearch, ReadWebPage],
-  available_skills: [research]
-)
-```
-
-Add subject context:
-
-```ruby
-article = Article.find(1)
-conversation = agent.conversation(subject: article)
-```
-
-Choose prompt sections:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "writer",
-  instructions: "Write plainly.",
-  prompt_sections: %i[agent instructions tools environment]
-)
-```
-
-Build a custom prompt:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "custom",
-  instructions: "Answer in JSON.",
-  system_prompt: ->(prompt) {
-    [
-      prompt.agent_section,
-      prompt.instructions_section,
-      "Return only valid JSON."
-    ].compact.join("\n\n")
-  }
-)
-```
-
-Use safe prompt data blocks for pipeline-specific prompts:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "researcher",
-  system_prompt: ->(prompt) {
-    [
-      prompt.section(:agent),
-      prompt.section(:behavior),
-      prompt.untrusted_section(
-        :retrieval_context,
-        ExternalSearch.results_for("turnkit"),
-        label: "Retrieved external evidence."
-      ),
-      prompt.section(:tools),
-      prompt.section(:environment)
-    ].compact.join("\n\n")
-  }
-)
-```
-
-Choose a prompt mode:
-
-```ruby
-TurnKit::Agent.new(name: "main", prompt_mode: :full)    # default sections
-TurnKit::Agent.new(name: "worker", prompt_mode: :minimal) # agent, instructions, behavior, tools, environment
-TurnKit::Agent.new(name: "raw", prompt_mode: :none)     # tiny TurnKit identity prompt
-```
-
-TurnKit automatically uses the minimal prompt mode for delegated sub-agent turns unless the child agent sets its own `prompt_mode`.
-
-Inject live context on each turn:
-
-```ruby
-TurnKit.context_contributors << ->(context) {
-  TurnKit::LiveContextContribution.new(
-    name: "account",
-    content: AccountSummary.for(context.conversation.metadata["account_id"]),
-    trusted: false
-  )
-}
-```
-
-Live context and subject context are rendered below `TurnKit::SystemPrompt::CACHE_BOUNDARY`, so provider adapters can reuse the stable prefix in the future.
-
-Add model-specific prompt guidance:
-
-```ruby
-TurnKit.model_prompt_contributors[/claude/] = ->(context) {
-  TurnKit::PromptContribution.new(
-    stable_prefix: "Provider guidance for #{context.model}.",
-    section_overrides: {
-      behavior: "Be concise, tool-aware, and explicit about uncertainty."
-    }
-  )
-}
-```
-
-Inspect prompt shape without storing raw prompt text:
-
-```ruby
-prompt = TurnKit::SystemPrompt.new(agent: agent, turn: turn, conversation: conversation)
-prompt.report
-# => { "chars" => ..., "hash" => ..., "stable_chars" => ..., "dynamic_chars" => ... }
-```
-
 Delegate to sub-agents:
 
 ```ruby
@@ -257,10 +134,82 @@ turn = editor.conversation.ask("Ask the writer for three headlines.")
 puts turn.output_text
 ```
 
+Use prompt caching:
+
+```ruby
+TurnKit.prompt_cache = :auto
+```
+
+Disable prompt caching:
+
+```ruby
+TurnKit.prompt_cache = :off
+```
+
+Split custom prompts:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "cached",
+  system_prompt: [
+    "Stable instructions and tool guidance.",
+    TurnKit::SystemPrompt::CACHE_BOUNDARY,
+    "Dynamic subject and live context."
+  ].join("\n")
+)
+```
+
+Inspect usage:
+
+```ruby
+record = TurnKit.store.load_turn(turn.id)
+record.fetch("usage")
+```
+
+Return usage from custom clients:
+
+```ruby
+class MyClient < TurnKit::Client
+  def chat(model:, messages:, tools:, instructions:, temperature: nil, metadata: nil)
+    TurnKit::Result.new(
+      text: "provider response",
+      model: model,
+      usage: TurnKit::Usage.new(
+        input_tokens: 100,
+        output_tokens: 20,
+        cached_tokens: 80,
+        cache_write_tokens: 100
+      )
+    )
+  end
+end
+```
+
+Split instructions inside custom clients:
+
+```ruby
+stable, dynamic = TurnKit::SystemPrompt.split_cache_boundary(instructions)
+```
+
+Send `stable` with provider cache controls.
+
+Send `dynamic` as normal prompt content.
+
+Use a custom client:
+
+```ruby
+TurnKit.client = MyClient.new
+```
+
 Install Rails persistence:
 
 ```sh
 bin/rails generate turnkit:install
+```
+
+Run migrations:
+
+```sh
 bin/rails db:migrate
 ```
 
@@ -269,7 +218,6 @@ Configure Rails:
 ```ruby
 TurnKit.store = TurnKit::ActiveRecordStore.new
 TurnKit.default_model = "claude-sonnet-4-5"
-TurnKit.timeout = 300
 ```
 
 Reconcile stale turns:
@@ -289,9 +237,10 @@ TurnKit.timeout = 300
 TurnKit.max_depth = 3
 TurnKit.max_tool_executions = 100
 TurnKit.cost_limit = nil
+TurnKit.prompt_cache = :auto
 ```
 
-Override defaults per agent:
+Override an agent:
 
 ```ruby
 agent = TurnKit::Agent.new(
@@ -303,29 +252,18 @@ agent = TurnKit::Agent.new(
 )
 ```
 
-Override the model for a single conversation or turn:
-
-```ruby
-conversation = agent.conversation(model: "claude-opus-4-1")
-turn = conversation.run!(model: "gpt-4.1-mini")
-```
-
 | Option | Description |
 | --- | --- |
-| `default_model` | Set the default RubyLLM model. The model name determines the provider. |
-| `client` | Set the model client. Defaults to `TurnKit::Adapters::RubyLLM.new`. |
+| `default_model` | Set the default RubyLLM model. |
+| `client` | Set the model client. |
 | `store` | Set the conversation store. |
 | `max_iterations` | Limit model calls per turn. |
 | `timeout` | Limit seconds per root turn. |
 | `max_depth` | Limit sub-agent nesting. |
 | `max_tool_executions` | Limit tool calls per root turn. |
 | `cost_limit` | Limit cost per root turn. |
-| `prompt_sections` | Set default system prompt sections. |
-| `prompt_behavior` | Override the default behavior section text. |
-| `prompt_data_max_chars` | Limit data-block content rendered into prompts. |
-| `context_contributors` | Add live per-turn prompt context blocks. |
-| `system_prompt_contributors` | Add global prompt prefix/suffix/section overrides. |
-| `model_prompt_contributors` | Add model-matched prompt contributions. |
+| `prompt_cache` | Use provider prompt caching. |
+| `prompt_sections` | Set default prompt sections. |
 
 ## Contributing
 

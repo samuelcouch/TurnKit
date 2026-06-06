@@ -87,6 +87,25 @@ class TurnKitTest < Minitest::Test
     assert_equal [ :user ], client.calls.first.fetch(:messages).map { |message| message.fetch(:role) }
   end
 
+  def test_usage_tracks_cache_write_tokens
+    usage = TurnKit::Usage.new(input_tokens: 2, output_tokens: 3, cached_tokens: 5, cache_write_tokens: 7)
+
+    assert_equal 17, usage.total_tokens
+    assert_equal 7, usage.to_h.fetch("cache_write_tokens")
+  end
+
+  def test_turn_aggregates_cache_write_tokens_and_cost
+    client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 2, output_tokens: 3, cached_tokens: 5, cache_write_tokens: 7, cost: 0.01)))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client)
+
+    turn = agent.conversation.ask("Hi")
+    record = TurnKit.store.load_turn(turn.id)
+
+    assert_equal 7, record.fetch("usage").fetch("cache_write_tokens")
+    assert_equal 17, record.fetch("usage").fetch("total_tokens")
+    assert_equal 0.01, record.fetch("cost")
+  end
+
   def test_default_system_prompt_includes_agent_context_tools_skills_subject_and_environment
     skill = TurnKit::Skill.new(key: "research", name: "Research", description: "Use sources.", content: "Verify claims.")
     available = TurnKit::Skill.new(key: "writer", name: "Writer", description: "Draft prose.", content: "Write clearly.")
@@ -570,5 +589,69 @@ class TurnKitTest < Minitest::Test
     assert_equal "context_checking_tool", assistant_message.tool_calls.fetch("call_1").name
     assert tool_message.tool_result?
     assert_equal "call_1", tool_message.tool_call_id
+  end
+
+  def test_ruby_llm_adapter_caches_stable_anthropic_instructions
+    require "ruby_llm"
+
+    adapter = TurnKit::Adapters::RubyLLM.new
+    chat = Class.new do
+      attr_reader :messages
+
+      def initialize
+        @messages = []
+      end
+
+      def add_message(attributes)
+        @messages << RubyLLM::Message.new(attributes)
+      end
+
+      def with_instructions(_instructions)
+        raise "with_instructions should not be used for cacheable Anthropic prompts"
+      end
+    end.new
+    instructions = [ "stable", TurnKit::SystemPrompt::CACHE_BOUNDARY, "dynamic" ].join("\n")
+
+    adapter.send(:add_instructions, chat, instructions, model: "claude-sonnet-4-5")
+
+    assert_equal 2, chat.messages.length
+    cached_content = chat.messages.first.content
+    assert_instance_of RubyLLM::Content::Raw, cached_content
+    assert_equal "stable", cached_content.value.first.fetch(:text)
+    assert_equal({ type: "ephemeral" }, cached_content.value.first.fetch(:cache_control))
+    assert_equal "dynamic", chat.messages.last.content
+  end
+
+  def test_ruby_llm_adapter_skips_cache_for_non_anthropic_models
+    adapter = TurnKit::Adapters::RubyLLM.new
+    chat = Class.new do
+      attr_reader :instructions
+
+      def with_instructions(instructions)
+        @instructions = instructions
+      end
+    end.new
+    instructions = [ "stable", TurnKit::SystemPrompt::CACHE_BOUNDARY, "dynamic" ].join("\n")
+
+    adapter.send(:add_instructions, chat, instructions, model: "gpt-4.1-mini")
+
+    assert_equal instructions, chat.instructions
+  end
+
+  def test_ruby_llm_adapter_respects_prompt_cache_off
+    TurnKit.prompt_cache = :off
+    adapter = TurnKit::Adapters::RubyLLM.new
+    chat = Class.new do
+      attr_reader :instructions
+
+      def with_instructions(instructions)
+        @instructions = instructions
+      end
+    end.new
+    instructions = [ "stable", TurnKit::SystemPrompt::CACHE_BOUNDARY, "dynamic" ].join("\n")
+
+    adapter.send(:add_instructions, chat, instructions, model: "claude-sonnet-4-5")
+
+    assert_equal instructions, chat.instructions
   end
 end

@@ -2,17 +2,18 @@
 
 module TurnKit
   class Usage
-    attr_reader :input_tokens, :output_tokens, :cached_tokens, :cost
+    attr_reader :input_tokens, :output_tokens, :cached_tokens, :cache_write_tokens, :cost
 
-    def initialize(input_tokens: 0, output_tokens: 0, cached_tokens: 0, cost: nil)
+    def initialize(input_tokens: 0, output_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, cost: nil)
       @input_tokens = input_tokens.to_i
       @output_tokens = output_tokens.to_i
       @cached_tokens = cached_tokens.to_i
+      @cache_write_tokens = cache_write_tokens.to_i
       @cost = cost
     end
 
     def total_tokens
-      input_tokens + output_tokens + cached_tokens
+      input_tokens + output_tokens + cached_tokens + cache_write_tokens
     end
 
     def to_h
@@ -20,6 +21,7 @@ module TurnKit
         "input_tokens" => input_tokens,
         "output_tokens" => output_tokens,
         "cached_tokens" => cached_tokens,
+        "cache_write_tokens" => cache_write_tokens,
         "total_tokens" => total_tokens,
         "cost" => cost
       }.compact

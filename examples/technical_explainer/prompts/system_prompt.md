@@ -18,6 +18,8 @@ skills.
 
 {{tools}}
 
+<!-- TURNKIT_DYNAMIC_PROMPT_BOUNDARY -->
+
 {{subject}}
 
 {{live_context}}

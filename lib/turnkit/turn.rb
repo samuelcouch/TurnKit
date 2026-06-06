@@ -123,9 +123,12 @@ module TurnKit
           "input_tokens" => current["input_tokens"].to_i + usage.input_tokens,
           "output_tokens" => current["output_tokens"].to_i + usage.output_tokens,
           "cached_tokens" => current["cached_tokens"].to_i + usage.cached_tokens,
+          "cache_write_tokens" => current["cache_write_tokens"].to_i + usage.cache_write_tokens,
           "total_tokens" => current["total_tokens"].to_i + usage.total_tokens
         }
-        update!(usage: totals, heartbeat_at: Clock.now)
+        attributes = { usage: totals, heartbeat_at: Clock.now }
+        attributes[:cost] = @record["cost"].to_f + usage.cost.to_f if usage.cost
+        update!(attributes)
       end
 
       def update!(attributes)

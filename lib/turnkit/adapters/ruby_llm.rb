@@ -9,7 +9,7 @@ module TurnKit
         configure_from_environment
 
         chat = ::RubyLLM.chat(model: model)
-        chat.with_instructions(instructions) if instructions && !instructions.empty?
+        add_instructions(chat, instructions, model: model)
         chat.with_temperature(temperature) if temperature
         Array(tools).each { |tool| chat.with_tool(ruby_llm_tool(tool)) }
         Array(messages).each { |message| add_message(chat, message) }
@@ -55,6 +55,37 @@ module TurnKit
           )
         end
 
+        def add_instructions(chat, instructions, model:)
+          return if instructions.nil? || instructions.empty?
+
+          if prompt_cache_enabled? && anthropic_model?(model) && instructions.include?(SystemPrompt::CACHE_BOUNDARY)
+            stable, dynamic = SystemPrompt.split_cache_boundary(instructions)
+            add_system_message(chat, stable, cache: true)
+            add_system_message(chat, dynamic, cache: false)
+          else
+            chat.with_instructions(instructions)
+          end
+        end
+
+        def add_system_message(chat, content, cache: false)
+          content = content.to_s.strip
+          return if content.empty?
+
+          if cache
+            content = ::RubyLLM::Providers::Anthropic::Content.new(content, cache: true)
+          end
+
+          chat.add_message(role: :system, content: content)
+        end
+
+        def prompt_cache_enabled?
+          TurnKit.prompt_cache != :off
+        end
+
+        def anthropic_model?(model)
+          model.to_s.start_with?("claude")
+        end
+
         def ruby_llm_tool_calls(tool_calls)
           return nil if tool_calls.nil? || tool_calls.empty?
 
@@ -88,9 +119,10 @@ module TurnKit
             ToolCall.new(id: call.id, name: call.name, arguments: call.arguments)
           end
           usage = Usage.new(
-            input_tokens: response.respond_to?(:input_tokens) ? response.input_tokens : 0,
-            output_tokens: response.respond_to?(:output_tokens) ? response.output_tokens : 0,
-            cached_tokens: response.respond_to?(:cached_tokens) ? response.cached_tokens : 0
+            input_tokens: token_value(response, :input_tokens),
+            output_tokens: token_value(response, :output_tokens),
+            cached_tokens: token_value(response, :cached_tokens),
+            cache_write_tokens: token_value(response, :cache_creation_tokens)
           )
           Result.new(
             text: response.respond_to?(:content) ? response.content.to_s : response.to_s,
@@ -98,6 +130,10 @@ module TurnKit
             usage: usage,
             model: response.respond_to?(:model_id) ? response.model_id : model
           )
+        end
+
+        def token_value(response, method)
+          response.respond_to?(method) ? response.public_send(method).to_i : 0
         end
     end
   end

@@ -16,6 +16,7 @@ class Minitest::Test
     TurnKit.max_tool_executions = 100
     TurnKit.timeout = 300
     TurnKit.cost_limit = nil
+    TurnKit.prompt_cache = :auto
     TurnKit.prompt_sections = TurnKit::SystemPrompt::DEFAULT_SECTIONS.dup
     TurnKit.prompt_behavior = nil
     TurnKit.prompt_data_max_chars = 20_000

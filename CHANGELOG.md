@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 - 2026-06-06
+
+- Add Anthropic prompt cache support for stable system prompt sections.
+- Track cache write tokens and aggregate model costs on turns.
+- Refresh README usage examples for prompt caching and usage tracking.
+
 ## 0.2.0 - 2026-06-04
 
 - Add configurable system prompt sections and custom system prompt builders.

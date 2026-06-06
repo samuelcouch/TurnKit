@@ -41,7 +41,7 @@ module TurnKit
   class << self
     attr_accessor :default_model, :client, :store, :logger
     attr_accessor :max_iterations, :timeout, :max_depth, :max_tool_executions
-    attr_accessor :cost_limit
+    attr_accessor :cost_limit, :prompt_cache
     attr_accessor :prompt_sections, :prompt_behavior, :available_skills
     attr_accessor :prompt_data_max_chars, :context_contributors
     attr_accessor :system_prompt_contributors, :model_prompt_contributors
@@ -56,6 +56,7 @@ module TurnKit
   self.timeout = 300
   self.max_depth = 3
   self.max_tool_executions = 100
+  self.prompt_cache = :auto
   self.prompt_sections = SystemPrompt::DEFAULT_SECTIONS.dup
   self.prompt_data_max_chars = 20_000
   self.available_skills = []
