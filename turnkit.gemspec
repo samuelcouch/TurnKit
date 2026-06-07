@@ -8,8 +8,8 @@ Gem::Specification.new do |spec|
   spec.authors = [ "Sam Couch" ]
   spec.email = [ "sam@samcouch.com" ]
 
-  spec.summary = "Durable Ruby AI agent turns, tools, skills, and conversations."
-  spec.description = "TurnKit provides a small Ruby runtime for AI agents with conversations, turns, tool calls, terminal tools, file-based skills, sub-agents, and optional Rails persistence."
+  spec.summary = "Ruby/Rails agent runtime for durable AI conversations."
+  spec.description = "TurnKit is a Ruby/Rails agent runtime for durable AI conversations, tool calling, skills, sub-agents, context compaction, and persistence."
   spec.homepage = "https://github.com/samuelcouch/turnkit"
   spec.license = "MIT"
 

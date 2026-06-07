@@ -2,7 +2,11 @@
 
 module TurnKit
   class Client
-    def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, metadata: nil)
+    def validate!(model:)
+      true
+    end
+
+    def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, output_schema: nil, metadata: nil, on_event: nil)
       raise NotImplementedError
     end
   end

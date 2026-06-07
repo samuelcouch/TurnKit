@@ -87,6 +87,87 @@ class TurnKitTest < Minitest::Test
     assert_equal [ :user ], client.calls.first.fetch(:messages).map { |message| message.fetch(:role) }
   end
 
+  def test_pending_turn_can_preview_model_request_without_calling_model
+    client = FakeClient.new(TurnKit::Result.new(text: "unused"))
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", instructions: "Be brief.", tools: [ StatusTool ], client: client)
+    turn = agent.conversation.ask("Hi", async: true)
+
+    request = turn.preview
+
+    assert_equal "model-a", request.model
+    assert_equal [ "status_tool" ], request.tool_names
+    assert_includes request.instructions, "Be brief."
+    assert_equal [ :user ], request.messages.map { |message| message.fetch(:role) }
+    assert_operator request.report.fetch("chars"), :>, 0
+    assert_empty client.calls
+  end
+
+  def test_structured_output_schema_is_passed_and_persisted
+    schema = { "type" => "object", "properties" => { "title" => { "type" => "string" } }, "required" => [ "title" ] }
+    data = { "title" => "Launch" }
+    client = FakeClient.new(TurnKit::Result.new(text: data.to_json, output_data: data))
+    agent = TurnKit::Agent.new(name: "writer", model: "model-a", output_schema: schema, client: client)
+
+    turn = agent.conversation.ask("Write JSON")
+
+    assert_equal schema, client.calls.first.fetch(:output_schema)
+    assert_equal data, turn.output_data
+    assert_equal data, TurnKit.store.load_turn(turn.id).fetch("output_data")
+  end
+
+  def test_ruby_llm_adapter_normalizes_output_schema_for_strict_providers
+    schema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        meta: { type: "object", properties: { count: { type: "integer" } } }
+      },
+      required: ["title", "meta"]
+    }
+
+    normalized = TurnKit::Adapters::RubyLLM.new.send(:normalize_schema, schema)
+
+    assert_equal false, normalized.fetch("additionalProperties")
+    assert_equal false, normalized.fetch("properties").fetch("meta").fetch("additionalProperties")
+    assert_equal "string", normalized.fetch("properties").fetch("title").fetch("type")
+  end
+
+  def test_lifecycle_events_are_emitted
+    events = []
+    agent = TurnKit::Agent.new(name: "helper", client: FakeClient.new(TurnKit::Result.new(text: "hello")), on_event: ->(event) { events << event })
+
+    turn = agent.conversation.ask("Hi")
+
+    assert turn.completed?
+    assert_includes events.map(&:type), "turn.started"
+    assert_includes events.map(&:type), "model.requested"
+    assert_includes events.map(&:type), "model.completed"
+    assert_includes events.map(&:type), "turn.completed"
+    assert events.all? { |event| event.turn_id == turn.id }
+  end
+
+  def test_tool_argument_validation_reports_schema_errors
+    assert_raises(TurnKit::ToolValidationError) { StatusTool.validate_arguments({}) }
+    assert_raises(TurnKit::ToolValidationError) { StatusTool.validate_arguments("id" => 1) }
+    assert_raises(TurnKit::ToolValidationError) { StatusTool.validate_arguments("id" => "st_1", "extra" => true) }
+    assert_equal({ "id" => "st_1" }, StatusTool.validate_arguments("id" => "st_1"))
+  end
+
+  def test_invalid_tool_call_json_fails_tool_execution_without_calling_tool
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "call_1", name: "status_tool", arguments: "{") ]),
+      TurnKit::Result.new(text: "recovered")
+    )
+    agent = TurnKit::Agent.new(name: "helper", client: client, tools: [ StatusTool ])
+
+    turn = agent.conversation.ask("Use the tool")
+
+    execution = turn.tool_executions.first
+    assert execution.failed?
+    assert_equal "invalid JSON arguments", execution.error.fetch("message")
+    assert_equal "recovered", turn.output_text
+  end
+
   def test_agent_thinking_is_passed_to_client_and_persisted_on_turn
     client = FakeClient.new(TurnKit::Result.new(text: "hello"))
     agent = TurnKit::Agent.new(name: "helper", model: "model-a", thinking: { "budget" => 4_000 }, client: client)
@@ -542,6 +623,7 @@ class TurnKitTest < Minitest::Test
     child_turn = TurnKit.store.list_turns(root_turn_id: turn.id).find { |row| row.fetch("id") != turn.id }
     refute_nil child_turn
     assert_equal turn.id, child_turn.fetch("parent_turn_id")
+    refute_equal turn.conversation.id, child_turn.fetch("conversation_id")
   end
 
   def test_reconcile_stale_marks_old_running_turns_stale

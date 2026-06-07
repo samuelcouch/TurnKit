@@ -5,7 +5,7 @@ module TurnKit
     TURN_STATUSES = %w[pending running completed failed cancelled stale].freeze
     TOOL_EXECUTION_STATUSES = %w[pending running completed failed cancelled].freeze
 
-    TURN_UPDATE_KEYS = %w[status options usage cost error output_text started_at heartbeat_at completed_at].freeze
+    TURN_UPDATE_KEYS = %w[status options usage cost error output_text output_data started_at heartbeat_at completed_at].freeze
     TOOL_EXECUTION_UPDATE_KEYS = %w[status result error started_at completed_at].freeze
 
     module_function
@@ -49,6 +49,7 @@ module TurnKit
         "cost" => attrs["cost"],
         "error" => attrs["error"],
         "output_text" => attrs["output_text"],
+        "output_data" => attrs["output_data"],
         "started_at" => attrs["started_at"],
         "heartbeat_at" => attrs["heartbeat_at"],
         "completed_at" => attrs["completed_at"],

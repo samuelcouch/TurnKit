@@ -12,6 +12,8 @@ require_relative "turnkit/id"
 require_relative "turnkit/clock"
 require_relative "turnkit/cost"
 require_relative "turnkit/budget"
+require_relative "turnkit/event"
+require_relative "turnkit/model_request"
 require_relative "turnkit/agent"
 require_relative "turnkit/client"
 require_relative "turnkit/conversation"
@@ -49,6 +51,7 @@ module TurnKit
     attr_accessor :prompt_sections, :prompt_behavior, :available_skills
     attr_accessor :prompt_data_max_chars, :context_contributors
     attr_accessor :system_prompt_contributors, :model_prompt_contributors
+    attr_accessor :on_event
     attr_accessor :conversation_record_class, :turn_record_class
     attr_accessor :message_record_class, :tool_execution_record_class
   end
@@ -69,6 +72,7 @@ module TurnKit
   self.context_contributors = []
   self.system_prompt_contributors = []
   self.model_prompt_contributors = {}
+  self.on_event = nil
 
   def self.reconcile_stale!(before: Clock.now - (timeout || 300))
     store.find_stale_turns(before: before).each do |turn|

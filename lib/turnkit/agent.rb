@@ -4,11 +4,12 @@ module TurnKit
   class Agent
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions
-    attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction
+    attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction, :output_schema, :on_event
 
     def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], available_skills: [], sub_agents: [],
       system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
-      max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil, thinking: nil, compaction: nil)
+      max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil, thinking: nil, compaction: nil,
+      output_schema: nil, on_event: nil)
       @name = name.to_s
       @description = description.to_s
       @model = model
@@ -29,7 +30,10 @@ module TurnKit
       @max_tool_executions = max_tool_executions
       @thinking = self.class.normalize_thinking(thinking)
       @compaction = compaction
+      @output_schema = output_schema
+      @on_event = on_event
       raise ArgumentError, "name is required" if @name.empty?
+      validate_tools!
     end
 
     def self.normalize_thinking(value)
@@ -86,6 +90,10 @@ module TurnKit
       tools + sub_agents.map { |agent| SubAgentTool.for(agent) }
     end
 
+    def effective_on_event
+      on_event || TurnKit.on_event
+    end
+
     def effective_available_skills
       (Array(TurnKit.available_skills) + available_skills).uniq { |skill| skill.key }
     end
@@ -129,5 +137,14 @@ module TurnKit
       parts << SystemPrompt.loaded_skills_text(skills)
       parts.reject(&:empty?).join("\n\n")
     end
+
+    private
+      def validate_tools!
+        names = effective_tools.map(&:tool_name)
+        duplicate = names.find { |name| names.count(name) > 1 }
+        raise ArgumentError, "duplicate tool name: #{duplicate}" if duplicate
+
+        effective_tools.each(&:validate_definition!)
+      end
   end
 end

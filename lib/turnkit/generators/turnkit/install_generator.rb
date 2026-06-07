@@ -25,6 +25,12 @@ module TurnKit
         template "tool_execution.rb", "app/models/turnkit/tool_execution.rb"
       end
 
+      def create_ai_directories
+        empty_directory "app/ai/agents"
+        empty_directory "app/ai/tools"
+        empty_directory "app/ai/skills"
+      end
+
       def copy_migration
         migration_template "create_turnkit_tables.rb", "db/migrate/create_turnkit_tables.rb"
       end

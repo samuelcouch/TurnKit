@@ -4,7 +4,7 @@
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1-red.svg)](https://www.ruby-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.md)
 
-Build durable Ruby AI agents with turns, tools, skills, and Rails persistence.
+Build durable Ruby and Rails agents with tools, skills, sub-agents, and persistence.
 
 ## Installation
 
@@ -22,20 +22,11 @@ bundle install
 
 ## Quick Start
 
-Set a provider key. TurnKit uses RubyLLM under the hood and defaults to Anthropic Claude:
+Set an API key:
 
 ```sh
 export ANTHROPIC_API_KEY=...
 ```
-
-| Provider | Env var | Example model |
-| --- | --- | --- |
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-5` |
-| OpenAI | `OPENAI_API_KEY` | `gpt-4.1-mini` |
-| Gemini | `GEMINI_API_KEY` | `gemini-2.5-flash` |
-
-> [!WARNING]
-> TurnKit defaults to `claude-sonnet-4-5`. If `ANTHROPIC_API_KEY` is unset or blank, set `TurnKit.default_model` to a provider you have configured.
 
 Create an agent:
 
@@ -59,69 +50,28 @@ puts turn.output_text
 
 ### Models
 
-Set the default model:
-
-```ruby
-TurnKit.default_model = "claude-sonnet-4-5"
-```
-
-Use OpenAI:
-
-```sh
-export OPENAI_API_KEY=...
-```
-
-Set an OpenAI model:
+Set a model:
 
 ```ruby
 TurnKit.default_model = "gpt-4.1-mini"
 ```
 
-Use Gemini:
+Set the matching key:
 
 ```sh
-export GEMINI_API_KEY=...
+export OPENAI_API_KEY=...
 ```
 
-Set a Gemini model:
+Use these common providers:
 
-```ruby
-TurnKit.default_model = "gemini-2.5-flash"
-```
+| Provider | Key | Model |
+| --- | --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-5` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-4.1-mini` |
+| Gemini | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| OpenRouter | `OPENROUTER_API_KEY` | `openrouter/...` |
 
-### Thinking
-
-Enable provider reasoning or extended thinking per agent:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "reasoner",
-  model: "claude-sonnet-4-5",
-  thinking: { budget: 4_000 }
-)
-```
-
-Use effort-based thinking for providers that support it:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "reasoner",
-  model: "gemini-2.5-flash",
-  thinking: { effort: :high }
-)
-```
-
-Override or disable thinking for one turn:
-
-```ruby
-conversation = agent.conversation
-conversation.ask("Solve this carefully.", thinking: { budget: 8_000 })
-conversation.ask("Answer quickly.", thinking: nil)
-```
-
-TurnKit passes `thinking` to RubyLLM as `{ effort:, budget: }`. Anthropic requires `budget`; Gemini and OpenRouter can use `effort`, `budget`, or both depending on the model.
-
-When the provider reports reasoning usage, TurnKit records it as `thinking_tokens` and includes it in usage totals and cost calculation.
+Expect `TurnKit::ModelAccessError` for obvious key mistakes.
 
 ### Conversations
 
@@ -132,12 +82,13 @@ agent = TurnKit::Agent.new(
   name: "writer",
   instructions: "Write clear release notes."
 )
+
+conversation = agent.conversation(subject: "v1 launch")
 ```
 
 Add context:
 
 ```ruby
-conversation = agent.conversation(subject: "v1 launch")
 conversation.say("Mention faster tool execution.")
 ```
 
@@ -148,91 +99,29 @@ turn = conversation.run!
 puts turn.output_text
 ```
 
-### Context compaction
+### Prompt Preview
 
-TurnKit automatically compacts long conversations. Older messages are summarized for future model calls, while the original transcript remains stored durably.
-
-```ruby
-conversation = agent.conversation
-conversation.ask("Work through this long task.")
-```
-
-By default, compaction is enabled and uses the current turn model for the summary call. If a turn runs with `gpt-5`, compaction uses `gpt-5` unless you configure a separate summary model.
-
-Disable compaction globally:
+Preview a pending turn:
 
 ```ruby
-TurnKit.compaction = false
+turn = conversation.ask("Draft the launch email.", async: true)
+request = turn.preview
 ```
 
-Use a different model for summaries:
+Inspect the request:
 
 ```ruby
-TurnKit.compaction = {
-  model: "gpt-4.1-mini"
-}
+request.model
+request.messages
+request.tool_names
+request.instructions
+request.report
 ```
 
-You can also configure the compaction threshold and estimated context limit:
+Run the reviewed turn:
 
 ```ruby
-TurnKit.compaction = {
-  model: "gpt-4.1-mini",
-  threshold: 0.75,
-  context_limit: 128_000
-}
-```
-
-Configure compaction for one agent:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "engineer",
-  model: "gpt-5",
-  compaction: {
-    model: "gpt-4.1-mini",
-    threshold: 0.75,
-    context_limit: 128_000
-  }
-)
-```
-
-In this example, normal turns use `gpt-5` and compaction summaries use `gpt-4.1-mini`.
-
-Override the model for one manual compaction:
-
-```ruby
-conversation.compact!(model: "gpt-4.1-mini")
-conversation.compact!(focus: "billing migration", model: "gpt-4.1-mini")
-```
-
-Disable compaction for a single turn:
-
-```ruby
-conversation.ask("Continue", compact: false)
-```
-
-Manually compact a conversation:
-
-```ruby
-conversation.compact!
-conversation.compact!(focus: "billing migration")
-```
-
-Compaction is append-only: TurnKit stores a `context_summary` message with metadata describing the message range it replaces for model projection. The original messages are not deleted, so `conversation.messages` remains the full durable transcript. Future model calls see a compacted projection that includes a reference-only summary and the recent tail.
-
-The model-visible projection uses a synthetic summary exchange followed by recent messages:
-
-```text
-user: What did we do so far?
-assistant: [CONTEXT COMPACTION — REFERENCE ONLY] ...
-user: latest request
-```
-
-For a local smoke test without calling a real provider, run:
-
-```sh
-ruby script/manual_compaction.rb
+turn.run!
 ```
 
 ### Tools
@@ -243,11 +132,15 @@ Create a tool:
 class SaveReport < TurnKit::Tool
   description "Save a report."
   usage_hint "Use when the user asks to persist a report."
+
   parameter :title, :string, required: true
   parameter :body, :string, required: true
 
   def self.ends_turn? = true
-  def self.completion_message(result) = "Saved #{result.fetch("report_id")}."
+
+  def self.completion_message(result)
+    "Saved #{result.fetch("report_id")}."
+  end
 
   def call(title:, body:, context:)
     { report_id: "rep_1", title: title, body: body }
@@ -255,7 +148,7 @@ class SaveReport < TurnKit::Tool
 end
 ```
 
-Use the tool:
+Register the tool:
 
 ```ruby
 agent = TurnKit::Agent.new(
@@ -265,82 +158,87 @@ agent = TurnKit::Agent.new(
 )
 ```
 
-Ask for tool use:
+Run the tool loop:
 
 ```ruby
 turn = agent.conversation.ask("Save a short status report.")
 puts turn.output_text
 ```
 
-#### Defining application tools
+Rely on TurnKit to validate tools and model-provided arguments.
 
-Tools are classes, not instances. Namespaced tools work fine, and the default tool name comes from the class name: `Assistant::Tools::WebSearch` becomes `web_search`.
+### Structured Output
+
+Define a schema:
 
 ```ruby
-module Assistant
-  module Tools
-    class WebSearch < TurnKit::Tool
-      description "Search the web for current information."
-      usage_hint "Use when current external information is needed."
-
-      parameter :objective, :string, required: true
-      parameter :search_queries, :array, required: false
-
-      def call(objective:, search_queries: nil, context:)
-        ParallelClient.new.web_search(
-          objective: objective,
-          search_queries: search_queries
-        )
-      end
-    end
-  end
-end
+schema = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    bullets: {
+      type: "array",
+      items: { type: "string" }
+    }
+  },
+  required: ["title", "bullets"]
+}
 ```
 
-Register tool classes on the agent:
+Use structured output:
 
 ```ruby
 agent = TurnKit::Agent.new(
-  name: "researcher",
-  tools: [
-    Assistant::Tools::WebSearch,
-    Assistant::Tools::ReadWebPage
-  ]
+  name: "writer",
+  output_schema: schema
+)
+
+turn = agent.conversation.ask("Summarize the launch plan.")
+puts turn.output_data
+```
+
+Override the schema per turn:
+
+```ruby
+conversation.ask(
+  "Return one decision.",
+  output_schema: {
+    type: "object",
+    properties: {
+      decision: { type: "string" }
+    }
+  }
 )
 ```
 
-#### Tool context
+### Events
 
-Every tool receives a `context:` object. Use it for logging, correlation, persistence, and domain scoping:
+Subscribe globally:
 
 ```ruby
-def call(query:, context:)
-  context.turn       # The TurnKit::Turn being run
-  context.execution  # The TurnKit::ToolExecution for this tool call
-
-  { query: query }
+TurnKit.on_event = ->(event) do
+  Rails.logger.info("turnkit.#{event.type}")
 end
 ```
 
-If your application already uses a `context:` keyword for something else, use `turnkit_context:` instead:
+Subscribe per agent:
 
 ```ruby
-def call(query:, turnkit_context:)
-  { turn_id: turnkit_context.turn.id, query: query }
+agent = TurnKit::Agent.new(
+  name: "helper",
+  on_event: ->(event) { puts event.type }
+)
+```
+
+Subscribe per turn:
+
+```ruby
+turn.run! do |event|
+  puts event.type
 end
 ```
 
-#### Tool return values
-
-Prefer returning a `Hash`. TurnKit serializes the normalized value as the tool result:
-
-| Return value | Stored tool result |
-| --- | --- |
-| `Hash` | Keys are stringified. |
-| `Array` | Wrapped as `{ "items" => [...] }`. |
-| Scalar | Wrapped as `{ "result" => value.to_s }`. |
-
-Avoid returning arbitrary objects unless you convert them to a plain Hash or Array first.
+Use events for turns, model calls, messages, and tool calls.
 
 ### Skills
 
@@ -370,7 +268,7 @@ writer = TurnKit::Agent.new(
 )
 ```
 
-Delegate to it:
+Register the sub-agent:
 
 ```ruby
 editor = TurnKit::Agent.new(
@@ -386,117 +284,36 @@ turn = editor.conversation.ask("Ask the writer for three headlines.")
 puts turn.output_text
 ```
 
-### Usage and costs
+Use sub-agents for isolated child conversations.
 
-Inspect token usage:
+### Context Compaction
+
+Disable compaction:
 
 ```ruby
-turn.usage.total_tokens
-conversation.usage.total_tokens
-agent.usage.total_tokens
+TurnKit.compaction = false
 ```
 
-Inspect costs:
+Configure compaction:
 
 ```ruby
-turn.cost.total
-conversation.cost.total
-agent.cost.total
-```
-
-Use RubyLLM registry prices by default.
-
-Override model rates:
-
-```ruby
-TurnKit.cost_rates = {
-  "my-model" => {
-    input: 0.25,
-    output: 1.00,
-    cached_input: 0.05,
-    cache_creation: 0.25
-  }
+TurnKit.compaction = {
+  model: "gpt-4.1-mini",
+  threshold: 0.75,
+  context_limit: 128_000
 }
 ```
 
-Override cost calculation:
+Compact manually:
 
 ```ruby
-TurnKit.cost_calculator = ->(usage, model) do
-  {
-    input: usage.input_tokens * 0.25 / 1_000_000.0,
-    output: usage.output_tokens * 1.00 / 1_000_000.0
-  }
-end
+conversation.compact!(focus: "billing migration")
 ```
 
-Limit turn cost:
+Run the local smoke test:
 
-```ruby
-agent = TurnKit::Agent.new(
-  name: "analyst",
-  cost_limit: 0.25
-)
-```
-
-### Prompt caching
-
-Enable prompt caching:
-
-```ruby
-TurnKit.prompt_cache = :auto
-```
-
-Disable prompt caching:
-
-```ruby
-TurnKit.prompt_cache = :off
-```
-
-Split custom prompts:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "cached",
-  system_prompt: [
-    "Stable instructions and tool guidance.",
-    TurnKit::SystemPrompt::CACHE_BOUNDARY,
-    "Dynamic subject and live context."
-  ].join("\n")
-)
-```
-
-### Custom clients
-
-Create a client:
-
-```ruby
-class MyClient < TurnKit::Client
-  def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, metadata: nil)
-    TurnKit::Result.new(
-      text: "provider response",
-      model: model,
-      usage: TurnKit::Usage.new(
-        input_tokens: 100,
-        output_tokens: 20,
-        cached_tokens: 80,
-        cache_write_tokens: 100
-      )
-    )
-  end
-end
-```
-
-Use the client:
-
-```ruby
-TurnKit.client = MyClient.new
-```
-
-Split cache sections:
-
-```ruby
-stable, dynamic = TurnKit::SystemPrompt.split_cache_boundary(instructions)
+```sh
+ruby script/manual_compaction.rb
 ```
 
 ### Rails
@@ -507,47 +324,18 @@ Install Rails persistence:
 bin/rails generate turnkit:install
 ```
 
-The installer creates:
-
-- `config/initializers/turnkit.rb`
-- `app/models/turnkit/conversation.rb`
-- `app/models/turnkit/turn.rb`
-- `app/models/turnkit/message.rb`
-- `app/models/turnkit/tool_execution.rb`
-- a migration for TurnKit persistence
-
-The generated migration currently uses `ActiveRecord::Migration[7.1]`. In a newer Rails app, update that version if your app requires it, for example `ActiveRecord::Migration[8.1]`.
-
 Run migrations:
 
 ```sh
 bin/rails db:migrate
 ```
 
-Configure Rails:
-
-```ruby
-TurnKit.store = TurnKit::ActiveRecordStore.new
-```
-
-Suggested Rails file layout for your application AI code:
+Use this layout:
 
 ```text
-app/models/assistant/
-  tools/
-    web_search.rb
-    read_web_page.rb
-  skills/
-  prompts/
-```
-
-If you prefer to keep AI infrastructure out of `app/models`, add an autoloaded directory such as:
-
-```text
-app/ai/
-  tools/
-  skills/
-  prompts/
+app/ai/agents/
+app/ai/tools/
+app/ai/skills/
 ```
 
 Reconcile stale turns:
@@ -556,114 +344,63 @@ Reconcile stale turns:
 TurnKit.reconcile_stale!
 ```
 
-#### Debugging Rails persistence
-
-Inspect the latest persisted turn in a Rails console:
-
-```ruby
-turn = Turnkit::Turn.order(created_at: :desc).first
-turn.status
-turn.error
-turn.output_text
-```
-
-Check whether the model actually called tools:
-
-```ruby
-Turnkit::ToolExecution
-  .where(turn_uid: turn.uid)
-  .order(:created_at)
-  .map { |execution|
-    {
-      name: execution.tool_name,
-      status: execution.status,
-      arguments: execution.arguments,
-      result_keys: execution.result&.keys,
-      error: execution.error
-    }
-  }
-```
-
-#### Live smoke test
-
-Use a model whose provider key is configured, then run a real tool-using turn:
-
-```ruby
-TurnKit.default_model = "gpt-4.1-mini"
-
-agent = TurnKit::Agent.new(
-  name: "researcher",
-  instructions: "Use web_search, then read_web_page, before answering.",
-  tools: [
-    Assistant::Tools::WebSearch,
-    Assistant::Tools::ReadWebPage
-  ]
-)
-
-turn = agent.conversation.ask(
-  "Search for the TurnKit Ruby gem, read the first useful result, then summarize it."
-)
-
-puts turn.output_text
-
-pp Turnkit::ToolExecution
-  .where(turn_uid: turn.id)
-  .order(:created_at)
-  .pluck(:tool_name, :status, :error)
-```
-
 ## Options
-
-Configure defaults:
-
-```ruby
-TurnKit.default_model = "claude-sonnet-4-5"
-TurnKit.max_iterations = 25
-TurnKit.timeout = 300
-TurnKit.max_depth = 3
-TurnKit.max_tool_executions = 100
-TurnKit.cost_limit = nil
-TurnKit.cost_rates = {}
-TurnKit.cost_calculator = nil
-TurnKit.prompt_cache = :auto
-TurnKit.compaction = true
-```
-
-Override an agent:
-
-```ruby
-agent = TurnKit::Agent.new(
-  name: "analyst",
-  model: "gpt-4.1-mini",
-  max_iterations: 10,
-  timeout: 60,
-  cost_limit: 0.25,
-  thinking: { effort: :low }
-)
-```
 
 | Option | Description |
 | --- | --- |
-| `default_model` | Set the default RubyLLM model. |
-| `client` | Set the model client. |
-| `store` | Set the conversation store. |
-| `max_iterations` | Limit model calls per turn. |
-| `timeout` | Limit seconds per root turn. |
-| `max_tool_executions` | Limit tool calls per root turn. |
-| `cost_limit` | Limit cost per root turn. |
-| `thinking` | Configure provider reasoning or extended thinking per agent. |
-| `cost_rates` | Override prices by model. |
-| `cost_calculator` | Override cost calculation. |
-| `prompt_cache` | Use provider prompt caching. |
-| `compaction` | Enable, disable, or configure automatic context compaction. |
+| `TurnKit.default_model` | Set the default model. |
+| `TurnKit.client` | Set the model client. |
+| `TurnKit.store` | Set the persistence store. |
+| `TurnKit.max_iterations` | Limit model loop iterations. |
+| `TurnKit.max_depth` | Limit sub-agent depth. |
+| `TurnKit.max_tool_executions` | Limit tool calls per turn. |
+| `TurnKit.timeout` | Limit turn runtime. |
+| `TurnKit.cost_limit` | Limit estimated turn cost. |
+| `TurnKit.compaction` | Configure context compaction. |
+| `TurnKit.on_event` | Subscribe to lifecycle events. |
+
+Set options globally:
+
+```ruby
+TurnKit.default_model = "gpt-4.1-mini"
+TurnKit.max_iterations = 25
+TurnKit.timeout = 300
+```
+
+Set options per agent:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "engineer",
+  model: "gpt-4.1-mini",
+  max_iterations: 10,
+  max_depth: 2
+)
+```
+
+Enable thinking:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "reasoner",
+  model: "claude-sonnet-4-5",
+  thinking: { budget: 4_000 }
+)
+```
+
+## Upgrading
+
+Add `output_data` for structured output persistence.
+
+```ruby
+add_column :turnkit_turns, :output_data, :json
+```
+
+Skip this step for new installs.
 
 ## Contributing
 
-Report bugs and open pull requests on GitHub:
-
-```text
-https://github.com/samuelcouch/turnkit
-```
+Fork the project.
 
 Run tests:
 
@@ -671,6 +408,14 @@ Run tests:
 bundle exec rake test
 ```
 
+Run syntax checks:
+
+```sh
+find lib test examples -type f -name '*.rb' -print0 | xargs -0 ruby -c
+```
+
+Open a pull request.
+
 ## License
 
-See the MIT License.
+Use this gem under the MIT License.

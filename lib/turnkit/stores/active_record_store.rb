@@ -57,7 +57,7 @@ module TurnKit
 
     def create_turn(attributes)
       attrs = Record.turn(attributes)
-      record = turn_class.create!(
+      record_attrs = {
         uid: attrs.fetch("id"),
         conversation_uid: attrs.fetch("conversation_id"),
         agent_name: attrs["agent_name"],
@@ -75,7 +75,9 @@ module TurnKit
         started_at: attrs["started_at"],
         heartbeat_at: attrs["heartbeat_at"],
         completed_at: attrs["completed_at"]
-      )
+      }
+      record_attrs[:output_data] = attrs["output_data"] if turn_has_attribute?("output_data")
+      record = turn_class.create!(record_attrs)
       turn_hash(record)
     end
 
@@ -85,7 +87,9 @@ module TurnKit
 
     def update_turn(id, attributes)
       record = turn_class.find_by!(uid: id)
-      record.update!(Record.turn_update(attributes))
+      attrs = Record.turn_update(attributes)
+      attrs.delete("output_data") unless turn_has_attribute?("output_data")
+      record.update!(attrs)
       turn_hash(record)
     end
 
@@ -160,7 +164,7 @@ module TurnKit
       end
 
       def turn_hash(record)
-        {
+        attrs = {
           "id" => record.uid, "conversation_id" => record.conversation_uid, "agent_name" => record.agent_name,
           "parent_turn_id" => record.parent_turn_uid, "parent_tool_execution_id" => record.parent_tool_execution_uid,
           "root_turn_id" => record.root_turn_uid, "context_message_sequence" => record.context_message_sequence,
@@ -169,6 +173,12 @@ module TurnKit
           "started_at" => record.started_at, "heartbeat_at" => record.heartbeat_at, "completed_at" => record.completed_at,
           "created_at" => record.created_at, "updated_at" => record.updated_at
         }
+        attrs["output_data"] = record.output_data if record.respond_to?(:output_data)
+        attrs
+      end
+
+      def turn_has_attribute?(name)
+        turn_class.respond_to?(:attribute_names) && turn_class.attribute_names.include?(name)
       end
 
       def message_hash(record)

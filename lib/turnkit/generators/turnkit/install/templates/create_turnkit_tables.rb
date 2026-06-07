@@ -30,6 +30,7 @@ class CreateTurnkitTables < ActiveRecord::Migration[7.1]
       t.decimal :cost, precision: 14, scale: 6
       t.json :error
       t.text :output_text
+      t.json :output_data
       t.datetime :started_at
       t.datetime :heartbeat_at
       t.datetime :completed_at

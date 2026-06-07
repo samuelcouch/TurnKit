@@ -21,9 +21,17 @@ module TurnKit
     def call(task:, context: nil, turnkit_context:)
       sub_agent = self.class.agent
       parent_turn = turnkit_context.turn
-      conversation = parent_turn.conversation
       prompt = [ task, context ].compact.join("\n\n")
-      trigger = conversation.append_message(role: "user", kind: "text", text: prompt, turn_id: parent_turn.id)
+      conversation = sub_agent.conversation(metadata: {
+        "parent_conversation_id" => parent_turn.conversation.id,
+        "parent_turn_id" => parent_turn.id,
+        "parent_tool_execution_id" => turnkit_context.execution.id
+      })
+      trigger = conversation.say(prompt, metadata: {
+        "parent_conversation_id" => parent_turn.conversation.id,
+        "parent_turn_id" => parent_turn.id,
+        "parent_tool_execution_id" => turnkit_context.execution.id
+      })
       child = conversation.run!(
         trigger_message_id: trigger.id,
         budget: parent_turn.budget,
@@ -31,9 +39,10 @@ module TurnKit
         parent_tool_execution: turnkit_context.execution,
         depth: parent_turn.depth + 1,
         model: sub_agent.effective_model,
-        agent: sub_agent
+        agent: sub_agent,
+        on_event: parent_turn.agent.effective_on_event
       )
-      { "turn_id" => child.id, "status" => child.status, "result" => child.output_text }
+      { "conversation_id" => conversation.id, "turn_id" => child.id, "status" => child.status, "result" => child.output_text, "output_data" => child.output_data }.compact
     end
   end
 end

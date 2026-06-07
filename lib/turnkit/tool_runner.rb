@@ -31,6 +31,10 @@ module TurnKit
           return finish_error(execution, tool_call, "unknown tool: #{tool_call.name}")
         end
 
+        if tool_call.arguments_error
+          return finish_error(execution, tool_call, tool_call.arguments_error)
+        end
+
         context = ToolContext.new(turn: turn, execution: execution)
         payload = begin
           normalize_payload(tool.call(tool_call.arguments, context: context))
@@ -54,6 +58,7 @@ module TurnKit
       def finish_success(execution, tool_call, payload)
         attrs = turn.store.update_tool_execution(execution.id, "status" => "completed", "result" => payload, "completed_at" => Clock.now)
         append_result(execution, tool_call, payload)
+        turn.emit("tool_call.completed", id: tool_call.id, name: tool_call.name)
         ToolExecution.new(attrs)
       end
 
@@ -61,11 +66,12 @@ module TurnKit
         error = { "message" => message.to_s, "details" => details }.compact
         attrs = turn.store.update_tool_execution(execution.id, "status" => "failed", "error" => error, "completed_at" => Clock.now)
         append_result(execution, tool_call, error)
+        turn.emit("tool_call.failed", id: tool_call.id, name: tool_call.name, error: error)
         ToolExecution.new(attrs)
       end
 
       def append_result(execution, tool_call, payload)
-        turn.conversation.append_message(
+        message = turn.conversation.append_message(
           role: "tool",
           kind: "tool_result",
           text: payload.to_json,
@@ -73,6 +79,7 @@ module TurnKit
           tool_execution_id: execution.id,
           metadata: { "tool_call_id" => tool_call.id, "tool_name" => tool_call.name }
         )
+        turn.emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
       end
 
       def tool_class(name)

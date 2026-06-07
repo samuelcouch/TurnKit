@@ -26,16 +26,17 @@ module TurnKit
       async ? turn : turn.run!
     end
 
-    def run!(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil)
-      build_turn(trigger_message_id: trigger_message_id, model: model, budget: budget, parent_turn: parent_turn, parent_tool_execution: parent_tool_execution, depth: depth, agent: agent, thinking: thinking, compact: compact).run!
+    def run!(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, on_event: nil)
+      build_turn(trigger_message_id: trigger_message_id, model: model, budget: budget, parent_turn: parent_turn, parent_tool_execution: parent_tool_execution, depth: depth, agent: agent, thinking: thinking, compact: compact, output_schema: output_schema, on_event: on_event).run!
     end
 
-    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil)
+    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, on_event: nil)
       snapshot = latest_message_sequence
       effective_thinking = thinking.equal?(THINKING_UNSET) ? agent.effective_thinking : Agent.normalize_thinking(thinking)
       options = { "trigger_message_id" => trigger_message_id }.compact
       options["thinking"] = effective_thinking
       options["compact"] = compact unless compact.nil?
+      options["output_schema"] = output_schema || agent.output_schema if output_schema || agent.output_schema
       record = store.create_turn(
         "conversation_id" => id,
         "agent_name" => agent.name,
@@ -47,7 +48,7 @@ module TurnKit
         "model" => model || self.model || agent.effective_model,
         "options" => options
       )
-      Turn.new(agent: agent, conversation: self, record: record, store: store, budget: budget, depth: depth)
+      Turn.new(agent: agent, conversation: self, record: record, store: store, budget: budget, depth: depth, on_event: on_event)
     end
 
     def compact!(focus: nil, model: nil)
