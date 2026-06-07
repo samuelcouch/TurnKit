@@ -6,7 +6,7 @@ module TurnKit
 
     attr_reader :agent, :conversation, :store, :budget, :depth
     attr_reader :id, :conversation_id, :agent_name, :parent_turn_id, :parent_tool_execution_id
-    attr_reader :root_turn_id, :context_message_sequence, :model, :thinking
+    attr_reader :root_turn_id, :context_message_sequence, :model, :thinking, :compact
     attr_reader :started_at
 
     def initialize(agent:, conversation:, record:, store:, budget: nil, depth: 0)
@@ -23,6 +23,7 @@ module TurnKit
       @context_message_sequence = @record["context_message_sequence"].to_i
       @model = @record["model"] || agent.effective_model
       @thinking = thinking_from_options
+      @compact = compact_from_options
       @started_at = @record["started_at"]
       @budget = budget || agent.build_budget
       @depth = depth
@@ -35,6 +36,7 @@ module TurnKit
       loop do
         budget.check!(depth: depth)
         budget.count_iteration!
+        TurnKit::Compaction.maybe_compact!(self)
 
         result = agent.effective_client.chat(
           model: model,
@@ -97,6 +99,7 @@ module TurnKit
     def reload
       @record = store.load_turn(id)
       @thinking = thinking_from_options
+      @compact = compact_from_options
       self
     end
 
@@ -106,7 +109,7 @@ module TurnKit
 
     private
       def llm_messages
-        MessageProjection.for(conversation.messages_for_turn(self))
+        MessageProjection.for(TurnKit::Compaction.project(conversation.messages_for_turn(self)))
       end
 
       def thinking_from_options
@@ -114,6 +117,11 @@ module TurnKit
         return Agent.normalize_thinking(options["thinking"]) if options.key?("thinking")
 
         agent.effective_thinking
+      end
+
+      def compact_from_options
+        options = (@record["options"] || {}).transform_keys(&:to_s)
+        options["compact"] if options.key?("compact")
       end
 
       def persist_assistant_message(result)

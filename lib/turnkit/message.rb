@@ -3,7 +3,7 @@
 module TurnKit
   class Message
     ROLES = %w[user assistant tool].freeze
-    KINDS = %w[text tool_call tool_result].freeze
+    KINDS = %w[text tool_call tool_result context_summary].freeze
 
     attr_reader :id, :conversation_id, :turn_id, :role, :kind, :sequence
     attr_reader :content, :text, :tool_execution_id, :provider_message_id, :metadata, :created_at
@@ -41,6 +41,26 @@ module TurnKit
         "metadata" => metadata,
         "created_at" => created_at
       }
+    end
+
+    def text?
+      kind == "text"
+    end
+
+    def tool_call?
+      kind == "tool_call"
+    end
+
+    def tool_result?
+      kind == "tool_result"
+    end
+
+    def context_summary?
+      kind == "context_summary"
+    end
+
+    def compaction_metadata
+      metadata.fetch("compaction", {})
     end
 
     private

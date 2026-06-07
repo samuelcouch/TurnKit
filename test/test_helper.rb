@@ -19,6 +19,7 @@ class Minitest::Test
     TurnKit.cost_rates = {}
     TurnKit.cost_calculator = nil
     TurnKit.prompt_cache = :auto
+    TurnKit.compaction = true
     TurnKit.prompt_sections = TurnKit::SystemPrompt::DEFAULT_SECTIONS.dup
     TurnKit.prompt_behavior = nil
     TurnKit.prompt_data_max_chars = 20_000

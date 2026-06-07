@@ -4,11 +4,11 @@ module TurnKit
   class Agent
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions
-    attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking
+    attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction
 
     def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], available_skills: [], sub_agents: [],
       system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
-      max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil, thinking: nil)
+      max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil, thinking: nil, compaction: nil)
       @name = name.to_s
       @description = description.to_s
       @model = model
@@ -28,6 +28,7 @@ module TurnKit
       @max_depth = max_depth
       @max_tool_executions = max_tool_executions
       @thinking = self.class.normalize_thinking(thinking)
+      @compaction = compaction
       raise ArgumentError, "name is required" if @name.empty?
     end
 

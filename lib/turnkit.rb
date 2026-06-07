@@ -25,6 +25,7 @@ require_relative "turnkit/prompt_contribution"
 require_relative "turnkit/system_prompt"
 require_relative "turnkit/store"
 require_relative "turnkit/memory_store"
+require_relative "turnkit/compaction"
 require_relative "turnkit/tool"
 require_relative "turnkit/tool_call"
 require_relative "turnkit/tool_execution"
@@ -43,6 +44,7 @@ module TurnKit
     attr_accessor :default_model, :client, :store, :logger
     attr_accessor :max_iterations, :timeout, :max_depth, :max_tool_executions
     attr_accessor :cost_limit, :prompt_cache
+    attr_accessor :compaction
     attr_accessor :cost_rates, :cost_calculator
     attr_accessor :prompt_sections, :prompt_behavior, :available_skills
     attr_accessor :prompt_data_max_chars, :context_contributors
@@ -59,6 +61,7 @@ module TurnKit
   self.max_depth = 3
   self.max_tool_executions = 100
   self.prompt_cache = :auto
+  self.compaction = true
   self.cost_rates = {}
   self.prompt_sections = SystemPrompt::DEFAULT_SECTIONS.dup
   self.prompt_data_max_chars = 20_000

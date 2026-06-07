@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6 - 2026-06-07
+
+- Add automatic context compaction for long conversations. TurnKit now stores append-only `context_summary` messages and projects compacted history into future model calls while keeping the full transcript durable.
+
 ## 0.2.5 - 2026-06-06
 
 - Add per-agent and per-turn provider thinking configuration.

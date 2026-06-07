@@ -148,6 +148,93 @@ turn = conversation.run!
 puts turn.output_text
 ```
 
+### Context compaction
+
+TurnKit automatically compacts long conversations. Older messages are summarized for future model calls, while the original transcript remains stored durably.
+
+```ruby
+conversation = agent.conversation
+conversation.ask("Work through this long task.")
+```
+
+By default, compaction is enabled and uses the current turn model for the summary call. If a turn runs with `gpt-5`, compaction uses `gpt-5` unless you configure a separate summary model.
+
+Disable compaction globally:
+
+```ruby
+TurnKit.compaction = false
+```
+
+Use a different model for summaries:
+
+```ruby
+TurnKit.compaction = {
+  model: "gpt-4.1-mini"
+}
+```
+
+You can also configure the compaction threshold and estimated context limit:
+
+```ruby
+TurnKit.compaction = {
+  model: "gpt-4.1-mini",
+  threshold: 0.75,
+  context_limit: 128_000
+}
+```
+
+Configure compaction for one agent:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "engineer",
+  model: "gpt-5",
+  compaction: {
+    model: "gpt-4.1-mini",
+    threshold: 0.75,
+    context_limit: 128_000
+  }
+)
+```
+
+In this example, normal turns use `gpt-5` and compaction summaries use `gpt-4.1-mini`.
+
+Override the model for one manual compaction:
+
+```ruby
+conversation.compact!(model: "gpt-4.1-mini")
+conversation.compact!(focus: "billing migration", model: "gpt-4.1-mini")
+```
+
+Disable compaction for a single turn:
+
+```ruby
+conversation.ask("Continue", compact: false)
+```
+
+Manually compact a conversation:
+
+```ruby
+conversation.compact!
+conversation.compact!(focus: "billing migration")
+```
+
+Compaction is append-only: TurnKit stores a `context_summary` message with metadata describing the message range it replaces for model projection. The original messages are not deleted, so `conversation.messages` remains the full durable transcript. Future model calls see a compacted projection that includes a reference-only summary and the recent tail.
+
+The model-visible projection uses a synthetic summary exchange followed by recent messages:
+
+```text
+user: What did we do so far?
+assistant: [CONTEXT COMPACTION — REFERENCE ONLY] ...
+user: latest request
+```
+
+For a local smoke test without calling a real provider, run:
+
+```sh
+ruby script/manual_compaction.rb
+```
+
 ### Tools
 
 Create a tool:
@@ -539,6 +626,7 @@ TurnKit.cost_limit = nil
 TurnKit.cost_rates = {}
 TurnKit.cost_calculator = nil
 TurnKit.prompt_cache = :auto
+TurnKit.compaction = true
 ```
 
 Override an agent:
@@ -567,6 +655,7 @@ agent = TurnKit::Agent.new(
 | `cost_rates` | Override prices by model. |
 | `cost_calculator` | Override cost calculation. |
 | `prompt_cache` | Use provider prompt caching. |
+| `compaction` | Enable, disable, or configure automatic context compaction. |
 
 ## Contributing
 
