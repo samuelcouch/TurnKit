@@ -44,12 +44,24 @@ module TurnKit
         @parameters ||= superclass.respond_to?(:parameters) ? superclass.parameters.dup : []
       end
 
-      def ends_turn?
-        false
+      def terminal!(message = nil, &block)
+        @ends_turn = true
+        @completion_message = block || message
       end
 
-      def completion_message(_result)
-        nil
+      def ends_turn?
+        @ends_turn || false
+      end
+
+      def completion_message(result)
+        case @completion_message
+        when nil
+          nil
+        when Proc
+          @completion_message.call(result)
+        else
+          @completion_message.to_s
+        end
       end
 
       def validate_definition!
@@ -101,8 +113,18 @@ module TurnKit
       end
 
       def call(arguments = {}, context:)
+        instance = begin
+          new
+        rescue ArgumentError => error
+          raise if error.message !~ /wrong number of arguments|missing keyword/
+
+          raise ToolError, "#{tool_name} requires constructor arguments; register an instance instead"
+        end
+        invoke(instance, arguments, context: context)
+      end
+
+      def invoke(instance, arguments = {}, context:)
         keyword_arguments = symbolize(validate_arguments(arguments))
-        instance = new
         if accepts_turnkit_context?(instance)
           instance.call(**keyword_arguments, turnkit_context: context)
         else
@@ -177,5 +199,14 @@ module TurnKit
           hash.transform_keys(&:to_sym)
         end
     end
+
+    def tool_name = self.class.tool_name
+    def description = self.class.description
+    def usage_hint = self.class.usage_hint
+    def parameters = self.class.parameters
+    def input_schema = self.class.input_schema
+    def validate_definition! = self.class.validate_definition!
+    def ends_turn? = self.class.ends_turn?
+    def completion_message(result) = self.class.completion_message(result)
   end
 end

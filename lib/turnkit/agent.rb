@@ -62,6 +62,21 @@ module TurnKit
       Conversation.new(agent: self, record: record, store: store, model: model || effective_model, subject: subject, metadata: metadata)
     end
 
+    def run(prompt = nil, task: nil, input: nil, async: false, subject: nil, metadata: {}, parent_run: nil, root_turn_id: nil, **options)
+      task = task || prompt
+      raise ArgumentError, "task is required" if task.to_s.empty?
+
+      conversation = self.conversation(subject: subject, metadata: metadata)
+      message = conversation.say(task_message(task, input), metadata: { "source" => "application", "task" => true })
+      turn = conversation.build_turn(
+        trigger_message_id: message.id,
+        root_turn_id: root_turn_id || parent_run_root_turn_id(parent_run),
+        **options
+      )
+      run = Run.new(turn)
+      async ? run : run.run!
+    end
+
     def cost
       Cost.from_records(effective_store.list_turns(agent_name: name))
     end
@@ -140,11 +155,44 @@ module TurnKit
 
     private
       def validate_tools!
+        effective_tools.each do |tool|
+          next if tool.is_a?(Class) && tool < Tool
+          next if tool.is_a?(Tool)
+
+          raise ArgumentError, "tools must be TurnKit::Tool classes or instances"
+        end
+
         names = effective_tools.map(&:tool_name)
         duplicate = names.find { |name| names.count(name) > 1 }
         raise ArgumentError, "duplicate tool name: #{duplicate}" if duplicate
 
         effective_tools.each(&:validate_definition!)
+      end
+
+      def task_message(task, input)
+        text = task.to_s
+        return text if input.nil?
+
+        "Task:\n#{text}\n\nInput:\n#{format_task_input(input)}"
+      end
+
+      def format_task_input(input)
+        case input
+        when String
+          input
+        else
+          JSON.pretty_generate(input)
+        end
+      rescue JSON::GeneratorError
+        input.inspect
+      end
+
+      def parent_run_root_turn_id(parent_run)
+        return nil unless parent_run
+        return parent_run.root_turn_id if parent_run.respond_to?(:root_turn_id)
+        return parent_run.fetch("root_turn_id") if parent_run.respond_to?(:fetch)
+
+        nil
       end
   end
 end

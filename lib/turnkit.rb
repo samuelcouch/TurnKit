@@ -15,6 +15,7 @@ require_relative "turnkit/budget"
 require_relative "turnkit/event"
 require_relative "turnkit/model_request"
 require_relative "turnkit/agent"
+require_relative "turnkit/fleet"
 require_relative "turnkit/client"
 require_relative "turnkit/conversation"
 require_relative "turnkit/message"
@@ -36,6 +37,7 @@ require_relative "turnkit/message_projection"
 require_relative "turnkit/tool_runner"
 require_relative "turnkit/turn"
 require_relative "turnkit/usage"
+require_relative "turnkit/run"
 require_relative "turnkit/adapters/ruby_llm"
 require_relative "turnkit/stores/active_record_store"
 
@@ -73,6 +75,30 @@ module TurnKit
   self.system_prompt_contributors = []
   self.model_prompt_contributors = {}
   self.on_event = nil
+
+  def self.configure
+    yield self
+  end
+
+  def self.model
+    default_model
+  end
+
+  def self.model=(value)
+    self.default_model = value
+  end
+
+  def self.max_spend
+    cost_limit
+  end
+
+  def self.max_spend=(value)
+    self.cost_limit = value
+  end
+
+  def self.fleet(name = "orchestrator", **options)
+    Fleet.new(name: name, **options)
+  end
 
   def self.reconcile_stale!(before: Clock.now - (timeout || 300))
     store.find_stale_turns(before: before).each do |turn|

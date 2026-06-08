@@ -41,6 +41,34 @@ class ContextCheckingTool < TurnKit::Tool
   end
 end
 
+class LookupClient
+  attr_reader :requests
+
+  def initialize(results)
+    @results = results
+    @requests = []
+  end
+
+  def lookup(id)
+    @requests << id
+    @results.fetch(id)
+  end
+end
+
+class InjectedLookupTool < TurnKit::Tool
+  tool_name "injected_lookup"
+  description "Look up data with an injected client."
+  parameter :id, :string, required: true
+
+  def initialize(client:)
+    @client = client
+  end
+
+  def call(id:, context:)
+    @client.lookup(id)
+  end
+end
+
 class StatusTool < TurnKit::Tool
   tool_name "status_tool"
   description "Look up status."
@@ -115,6 +143,164 @@ class TurnKitTest < Minitest::Test
     assert_equal data, TurnKit.store.load_turn(turn.id).fetch("output_data")
   end
 
+  def test_agent_run_executes_application_task_and_returns_run_wrapper
+    schema = { "type" => "object", "properties" => { "priority" => { "type" => "string" } }, "required" => [ "priority" ] }
+    data = { "priority" => "high" }
+    client = FakeClient.new(TurnKit::Result.new(text: data.to_json, output_data: data))
+    agent = TurnKit::Agent.new(name: "classifier", model: "model-a", output_schema: schema, client: client)
+
+    run = agent.run(task: "Classify this lead", input: { company: "ACME", size: "enterprise" })
+
+    assert_instance_of TurnKit::Run, run
+    assert run.completed?
+    assert_equal data, run.output_data
+    assert_equal schema, client.calls.first.fetch(:output_schema)
+    assert_includes client.calls.first.fetch(:messages).first.fetch(:content), "Classify this lead"
+    assert_includes client.calls.first.fetch(:messages).first.fetch(:content), "ACME"
+    assert_equal [ TurnKit.store.load_turn(run.id) ], run.turn_records
+  end
+
+  def test_agent_run_accepts_plain_task_string
+    client = FakeClient.new(TurnKit::Result.new(text: "done"))
+    agent = TurnKit::Agent.new(name: "worker", client: client)
+
+    run = agent.run("Classify this lead")
+
+    assert run.completed?
+    assert_equal "done", run.output
+    assert_equal 1, run.steps
+    assert_equal [], run.tool_calls
+    assert_equal 2, run.messages.length
+    assert_nil run.error
+  end
+
+  def test_agent_run_can_prepare_pending_run
+    client = FakeClient.new(TurnKit::Result.new(text: "done"))
+    agent = TurnKit::Agent.new(name: "worker", client: client)
+
+    run = agent.run(task: "Do this later", async: true)
+
+    assert run.pending?
+    assert_empty client.calls
+
+    run.run!
+
+    assert run.completed?
+    assert_equal "done", run.output_text
+  end
+
+  def test_fleet_runs_one_orchestrator_with_tools_and_skills
+    skill = TurnKit::Skill.new(key: "verify", name: "Verify", content: "Verify the tool result before final output.")
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "call_1", name: "status_tool", arguments: { id: "st_1" }) ]),
+      TurnKit::Result.new(text: "status is ok")
+    )
+    fleet = TurnKit::Fleet.new(
+      name: "support_orchestrator",
+      tools: [StatusTool],
+      skills: [skill],
+      client: client,
+      max_iterations: 4,
+      max_spend: 0.50,
+      compaction: { context_limit: 1_000 }
+    )
+
+    run = fleet.run(task: "Check status", input: { id: "st_1" })
+
+    assert run.completed?
+    assert_equal "status is ok", run.output_text
+    assert_equal [ "support_orchestrator" ], run.turn_records.map { |record| record.fetch("agent_name") }
+    assert_equal [ "status_tool" ], client.calls.first.fetch(:tools).map(&:tool_name)
+    assert_includes client.calls.first.fetch(:instructions), "autonomous task orchestrator"
+    assert_includes client.calls.first.fetch(:instructions), "## Skill: verify"
+    assert_includes client.calls.first.fetch(:instructions), "executing an application task"
+    assert_equal({ context_limit: 1_000 }, run.turn.agent.compaction)
+  end
+
+  def test_turnkit_fleet_factory_and_plain_run_api
+    TurnKit.configure do |config|
+      config.model = "model-b"
+      config.max_spend = 0.25
+    end
+
+    client = FakeClient.new(TurnKit::Result.new(text: "finished"))
+    fleet = TurnKit.fleet("research", client: client)
+
+    run = fleet.run("Create a brief")
+
+    assert run.completed?
+    assert_equal "finished", run.output
+    assert_equal "model-b", client.calls.first.fetch(:model)
+    assert_equal 0.25, TurnKit.cost_limit
+    assert_equal 0.25, TurnKit.max_spend
+  ensure
+    TurnKit.default_model = "test-model"
+    TurnKit.cost_limit = nil
+  end
+
+  def test_terminal_tool_macro_marks_tool_as_turn_ending
+    klass = Class.new(TurnKit::Tool) do
+      tool_name "save_note"
+      terminal! { |result| "Saved #{result.fetch("id")}." }
+
+      def call(context:)
+        { "id" => "note_1" }
+      end
+    end
+
+    assert klass.ends_turn?
+    assert_equal "Saved note_1.", klass.completion_message({ "id" => "note_1" })
+  end
+
+  def test_fleet_auto_run_alias_uses_same_single_orchestrator_runtime
+    client = FakeClient.new(TurnKit::Result.new(text: "final"))
+    fleet = TurnKit::Fleet.new(name: "brief_writer", client: client)
+
+    run = fleet.auto_run(task: "Create a brief")
+
+    assert run.completed?
+    assert_equal [ "brief_writer" ], run.turn_records.map { |record| record.fetch("agent_name") }
+    assert_equal "final", run.output_text
+  end
+
+  def test_fleet_auto_run_honors_max_spend_guardrail
+    expensive_client = FakeClient.new(TurnKit::Result.new(text: "too much", usage: TurnKit::Usage.new(cost: 0.02)))
+    fleet = TurnKit::Fleet.new(client: expensive_client)
+
+    run = fleet.auto_run(task: "Do expensive work", max_spend: 0.01)
+
+    assert run.failed?
+    error = TurnKit.store.load_turn(run.id).fetch("error")
+    assert_includes error.fetch("message"), "cost limit reached"
+  end
+
+  def test_app_driven_runs_can_share_root_lineage
+    parent_client = FakeClient.new(TurnKit::Result.new(text: "plan", usage: TurnKit::Usage.new(input_tokens: 1)))
+    child_client = FakeClient.new(TurnKit::Result.new(text: "draft", usage: TurnKit::Usage.new(output_tokens: 1)))
+    parent = TurnKit::Agent.new(name: "planner", client: parent_client)
+    child = TurnKit::Agent.new(name: "writer", client: child_client)
+
+    root = parent.run(task: "Plan launch")
+    child_run = child.run(task: "Draft launch copy", parent_run: root)
+
+    assert_equal root.root_turn_id, child_run.root_turn_id
+    assert_equal 2, root.turn_records.length
+    assert_equal [ "writer" ], root.descendant_turn_records.map { |record| record.fetch("agent_name") }
+    assert_equal [], root.failed_turn_records
+    assert_equal 2, root.usage.total_tokens
+  end
+
+  def test_task_prompt_mode_uses_non_interactive_behavior
+    client = FakeClient.new(TurnKit::Result.new(text: "done"))
+    agent = TurnKit::Agent.new(name: "worker", prompt_mode: :task, client: client)
+
+    agent.run(task: "Classify this lead")
+
+    instructions = client.calls.first.fetch(:instructions)
+    assert_includes instructions, "executing an application task"
+    assert_includes instructions, "Do not ask follow-up questions"
+  end
+
   def test_ruby_llm_adapter_normalizes_output_schema_for_strict_providers
     schema = {
       type: "object",
@@ -166,6 +352,45 @@ class TurnKitTest < Minitest::Test
     assert execution.failed?
     assert_equal "invalid JSON arguments", execution.error.fetch("message")
     assert_equal "recovered", turn.output_text
+  end
+
+  def test_tool_instances_can_inject_dependencies
+    lookup = LookupClient.new("st_1" => { "status" => "ok" })
+    tool = InjectedLookupTool.new(client: lookup)
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "call_1", name: "injected_lookup", arguments: { id: "st_1" }) ]),
+      TurnKit::Result.new(text: "looked up")
+    )
+    agent = TurnKit::Agent.new(name: "helper", client: client, tools: [tool])
+
+    turn = agent.conversation.ask("Look it up")
+
+    assert turn.completed?
+    assert_equal [ "st_1" ], lookup.requests
+    assert_equal [ "injected_lookup" ], client.calls.first.fetch(:tools).map(&:tool_name)
+    assert_equal "ok", turn.tool_executions.first.result.fetch("status")
+  end
+
+  def test_tool_classes_with_constructor_dependencies_report_actionable_error
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "call_1", name: "injected_lookup", arguments: { id: "st_1" }) ]),
+      TurnKit::Result.new(text: "recovered")
+    )
+    agent = TurnKit::Agent.new(name: "helper", client: client, tools: [InjectedLookupTool])
+
+    turn = agent.conversation.ask("Look it up")
+
+    execution = turn.tool_executions.first
+    assert execution.failed?
+    assert_includes execution.error.fetch("message"), "register an instance instead"
+  end
+
+  def test_agent_rejects_non_tool_entries
+    error = assert_raises(ArgumentError) do
+      TurnKit::Agent.new(name: "helper", tools: [Object.new])
+    end
+
+    assert_includes error.message, "TurnKit::Tool classes or instances"
   end
 
   def test_agent_thinking_is_passed_to_client_and_persisted_on_turn

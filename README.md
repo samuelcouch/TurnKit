@@ -20,6 +20,8 @@ Run:
 bundle install
 ```
 
+Upgrading from an earlier TurnKit version? See the [Upgrade Guide](UPGRADE.md).
+
 ## Quick Start
 
 Set an API key:
@@ -46,6 +48,13 @@ turn = agent.conversation.ask("Explain Ruby blocks in one sentence.")
 puts turn.output_text
 ```
 
+Or run a non-interactive application task:
+
+```ruby
+run = agent.run("Explain Ruby blocks in one sentence.")
+puts run.output
+```
+
 ## Usage
 
 ### Models
@@ -53,7 +62,17 @@ puts turn.output_text
 Set a model:
 
 ```ruby
-TurnKit.default_model = "gpt-4.1-mini"
+TurnKit.model = "gpt-4.1-mini"
+```
+
+Or configure TurnKit in one place:
+
+```ruby
+TurnKit.configure do |config|
+  config.model = "gpt-4.1-mini"
+  config.max_spend = 0.25
+  config.max_iterations = 12
+end
 ```
 
 Set the matching key:
@@ -97,6 +116,123 @@ Run the agent:
 ```ruby
 turn = conversation.run!
 puts turn.output_text
+```
+
+### Application Tasks
+
+Use `Agent#run` when your application is executing a task instead of chatting
+with a user:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "lead_classifier",
+  instructions: "Classify leads and return routing data.",
+  output_schema: {
+    type: "object",
+    properties: {
+      priority: { type: "string" },
+      reason: { type: "string" }
+    },
+    required: ["priority", "reason"]
+  },
+  prompt_mode: :task
+)
+
+run = agent.run(
+  "Classify this lead.",
+  input: { company: "Acme", employees: 1_200 }
+)
+
+puts run.output_data
+```
+
+`Agent#run` is a small wrapper over TurnKit's existing conversation and turn
+engine. Existing `conversation.ask` usage is still supported.
+
+Prepare a pending run without calling the model:
+
+```ruby
+run = agent.run(task: "Classify later.", async: true)
+request = run.preview
+run.run!
+```
+
+### Fleets
+
+Use a fleet when you want to package a reusable autonomous workflow: one
+task-mode orchestrator, workflow skills, tools, defaults, and guardrails. A
+fleet is not a requirement for multi-agent work; it is the reusable runtime for
+getting from input to output.
+
+```ruby
+source_grounded_brief = TurnKit::Skill.from_file("app/ai/skills/source_grounded_brief.md")
+
+fleet = TurnKit.fleet(
+  "brief_writer",
+  instructions: "Create source-grounded briefs and verify claims before final output.",
+  skills: [source_grounded_brief],
+  tools: [WebSearch.new, ReadWebPage.new, SaveBrief],
+  max_spend: 0.25,
+  max_iterations: 12,
+  max_tool_executions: 25,
+  compaction: {
+    context_limit: 64_000,
+    threshold: 0.75
+  }
+)
+
+run = fleet.run(
+  "Create a source-grounded brief.",
+  input: { topic: "Rails 8 Solid Queue" }
+)
+
+puts run.output
+puts run.tool_calls.map(&:tool_name)
+puts run.cost.total
+```
+
+This keeps the work in a single conversation and uses TurnKit's normal
+model-tool loop:
+
+```text
+model → tool → result → model → tool → result → final
+```
+
+`auto_run` is an alias for `run` when you want the name to emphasize autonomous
+execution:
+
+```ruby
+run = fleet.auto_run(
+  "Create compliant outreach for this account.",
+  input: lead.attributes,
+  max_spend: 0.25,
+  max_iterations: 8,
+  max_tool_executions: 20,
+  compaction: {
+    context_limit: 64_000,
+    threshold: 0.75
+  }
+)
+```
+
+Reach for separate agents and `sub_agents` only when the isolation is worth the
+extra model calls, such as different models, different tool permissions,
+parallel specialist review, or separate durable child conversations.
+
+Use `terminal!` for save or action tools that complete the run:
+
+```ruby
+class SaveBrief < TurnKit::Tool
+  description "Save the final brief."
+  parameter :title, :string, required: true
+  parameter :body, :string, required: true
+
+  terminal! { |result| "Saved #{result.fetch("id")}." }
+
+  def call(title:, body:, context:)
+    Brief.create!(title: title, body: body).then { |brief| { id: brief.id } }
+  end
+end
 ```
 
 ### Prompt Preview

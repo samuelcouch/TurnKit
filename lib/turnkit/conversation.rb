@@ -26,11 +26,11 @@ module TurnKit
       async ? turn : turn.run!
     end
 
-    def run!(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, on_event: nil)
-      build_turn(trigger_message_id: trigger_message_id, model: model, budget: budget, parent_turn: parent_turn, parent_tool_execution: parent_tool_execution, depth: depth, agent: agent, thinking: thinking, compact: compact, output_schema: output_schema, on_event: on_event).run!
+    def run!(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, root_turn_id: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, on_event: nil)
+      build_turn(trigger_message_id: trigger_message_id, model: model, budget: budget, parent_turn: parent_turn, parent_tool_execution: parent_tool_execution, root_turn_id: root_turn_id, depth: depth, agent: agent, thinking: thinking, compact: compact, output_schema: output_schema, on_event: on_event).run!
     end
 
-    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, on_event: nil)
+    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, root_turn_id: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, on_event: nil)
       snapshot = latest_message_sequence
       effective_thinking = thinking.equal?(THINKING_UNSET) ? agent.effective_thinking : Agent.normalize_thinking(thinking)
       options = { "trigger_message_id" => trigger_message_id }.compact
@@ -42,7 +42,7 @@ module TurnKit
         "agent_name" => agent.name,
         "parent_turn_id" => parent_turn&.id,
         "parent_tool_execution_id" => parent_tool_execution&.id,
-        "root_turn_id" => parent_turn&.root_turn_id,
+        "root_turn_id" => parent_turn&.root_turn_id || root_turn_id,
         "context_message_sequence" => snapshot,
         "status" => "pending",
         "model" => model || self.model || agent.effective_model,

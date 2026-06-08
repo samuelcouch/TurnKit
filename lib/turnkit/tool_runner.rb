@@ -9,13 +9,13 @@ module TurnKit
     def dispatch(tool_calls)
       tool_calls.each do |tool_call|
         execution = run(tool_call)
-        return execution if execution.completed? && tool_class(tool_call.name)&.ends_turn?
+        return execution if execution.completed? && tool_for(tool_call.name)&.ends_turn?
       end
       nil
     end
 
     def completion_message(execution)
-      tool = tool_class(execution.tool_name)
+      tool = tool_for(execution.tool_name)
       tool.completion_message(execution.result) || execution.result&.fetch("result", nil) || "Completed via #{execution.tool_name}."
     end
 
@@ -24,7 +24,7 @@ module TurnKit
 
       def run(tool_call)
         turn.budget.count_tool_execution!
-        tool = tool_class(tool_call.name)
+        tool = tool_for(tool_call.name)
         execution = ToolExecution.new(create_execution(tool_call))
 
         unless tool
@@ -37,7 +37,7 @@ module TurnKit
 
         context = ToolContext.new(turn: turn, execution: execution)
         payload = begin
-          normalize_payload(tool.call(tool_call.arguments, context: context))
+          normalize_payload(call_tool(tool, tool_call.arguments, context: context))
         rescue StandardError => error
           return finish_error(execution, tool_call, error.message, details: { "class" => error.class.name })
         end
@@ -82,8 +82,16 @@ module TurnKit
         turn.emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
       end
 
-      def tool_class(name)
+      def tool_for(name)
         turn.agent.effective_tools.find { |tool| tool.tool_name == name.to_s }
+      end
+
+      def call_tool(tool, arguments, context:)
+        if tool.is_a?(Class)
+          tool.call(arguments, context: context)
+        else
+          tool.class.invoke(tool, arguments, context: context)
+        end
       end
 
       def normalize_payload(value)
