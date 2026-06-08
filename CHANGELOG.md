@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.8 - 2026-06-08
+## 0.2.9 - 2026-06-08
 
 - Add `TurnKit::Workflow` for reusable single-orchestrator task runtimes with workflow skills, tools, guardrails, compaction, and run monitoring.
 - Add `Agent#run` and `TurnKit::Run` for non-interactive application tasks, with task prompt behavior by default.

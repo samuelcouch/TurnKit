@@ -14,7 +14,7 @@ test suite against the new release.
 
 ```ruby
 # Gemfile
-gem "turnkit", "~> 0.2.8"
+gem "turnkit", "~> 0.2.9"
 ```
 
 ```sh
