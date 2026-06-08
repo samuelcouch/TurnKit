@@ -6,7 +6,7 @@ module TurnKit
 
     attr_reader :agent, :conversation, :store, :budget, :depth
     attr_reader :id, :conversation_id, :agent_name, :parent_turn_id, :parent_tool_execution_id
-    attr_reader :root_turn_id, :context_message_sequence, :model, :thinking, :compact, :output_schema
+    attr_reader :root_turn_id, :context_message_sequence, :model, :thinking, :compact, :output_schema, :prompt_mode
     attr_reader :started_at
 
     def initialize(agent:, conversation:, record:, store:, budget: nil, depth: 0, on_event: nil)
@@ -25,6 +25,7 @@ module TurnKit
       @thinking = thinking_from_options
       @compact = compact_from_options
       @output_schema = output_schema_from_options
+      @prompt_mode = prompt_mode_from_options
       @started_at = @record["started_at"]
       @budget = budget || agent.build_budget
       @depth = depth
@@ -112,6 +113,7 @@ module TurnKit
       @thinking = thinking_from_options
       @compact = compact_from_options
       @output_schema = output_schema_from_options
+      @prompt_mode = prompt_mode_from_options
       self
     end
 
@@ -125,7 +127,7 @@ module TurnKit
 
     private
       def model_request
-        prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: agent.effective_prompt_mode(turn: self))
+        prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: prompt_mode || agent.effective_prompt_mode(turn: self))
         instructions = case agent.system_prompt
         when nil
           prompt.to_s
@@ -189,6 +191,11 @@ module TurnKit
       def output_schema_from_options
         options = (@record["options"] || {}).transform_keys(&:to_s)
         options["output_schema"] if options.key?("output_schema")
+      end
+
+      def prompt_mode_from_options
+        options = (@record["options"] || {}).transform_keys(&:to_s)
+        options["prompt_mode"]&.to_sym if options.key?("prompt_mode")
       end
 
       def persist_assistant_message(result)

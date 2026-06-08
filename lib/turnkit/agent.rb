@@ -62,7 +62,7 @@ module TurnKit
       Conversation.new(agent: self, record: record, store: store, model: model || effective_model, subject: subject, metadata: metadata)
     end
 
-    def run(prompt = nil, task: nil, input: nil, async: false, subject: nil, metadata: {}, parent_run: nil, root_turn_id: nil, **options)
+    def run(prompt = nil, task: nil, input: nil, async: false, subject: nil, metadata: {}, parent_run: nil, root_turn_id: nil, prompt_mode: :task, **options)
       task = task || prompt
       raise ArgumentError, "task is required" if task.to_s.empty?
 
@@ -71,6 +71,7 @@ module TurnKit
       turn = conversation.build_turn(
         trigger_message_id: message.id,
         root_turn_id: root_turn_id || parent_run_root_turn_id(parent_run),
+        prompt_mode: prompt_mode,
         **options
       )
       run = Run.new(turn)

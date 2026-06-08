@@ -7,7 +7,7 @@ require "net/http"
 require "uri"
 require "turnkit"
 
-module FleetResearcher
+module WorkflowResearcher
   def self.web_tools(parallel_client: ParallelClient.new)
     [
       Tools::WebSearch.new(parallel_client: parallel_client),
@@ -118,7 +118,7 @@ model = TurnKit.model
 request = ARGV.join(" ").strip
 request = "Create a source-grounded brief on Rails 8 Solid Queue for a Rails founder." if request.empty?
 
-workflow = TurnKit::Skill.new(
+source_grounded_brief = TurnKit::Skill.new(
   key: "source_grounded_brief",
   name: "Source Grounded Brief",
   description: "Research, draft, verify, and revise source-grounded briefs.",
@@ -137,12 +137,12 @@ workflow = TurnKit::Skill.new(
   TEXT
 )
 
-fleet = TurnKit.fleet(
-  "source_brief_orchestrator",
+workflow = TurnKit::Workflow.new(
+  name: "source_brief_orchestrator",
   description: "Creates source-grounded briefs with web research and verification.",
   model: model,
-  skills: [workflow],
-  tools: FleetResearcher.web_tools,
+  skills: [source_grounded_brief],
+  tools: WorkflowResearcher.web_tools,
   max_spend: Float(ENV.fetch("TURNKIT_MAX_SPEND", "0.50")),
   max_iterations: Integer(ENV.fetch("TURNKIT_MAX_ITERATIONS", "15")),
   max_tool_executions: Integer(ENV.fetch("TURNKIT_MAX_TOOL_EXECUTIONS", "30")),
@@ -155,8 +155,8 @@ fleet = TurnKit.fleet(
   TEXT
 )
 
-puts "Running fleet workflow..."
-run = fleet.run(
+puts "Running workflow..."
+run = workflow.run(
   "Create a source-grounded brief for the request.",
   input: { request: request }
 )

@@ -1,13 +1,27 @@
 # Upgrade Guide
 
-This guide covers migrating to the newer task-runtime API. The changes are
-mostly additive: existing `Agent`, `Conversation`, `Tool`, and `Fleet` code
-should continue to work. The recommended migration is about improving developer
-experience and making autonomous workflows easier to read.
+This guide covers migrating to the workflow-based task-runtime API. The
+recommended migration is about making the three work shapes easier to read:
+
+- conversations for durable multi-turn threads;
+- runs for one non-interactive application task;
+- workflows for reusable task runners with tools, skills, limits, and policy.
 
 ## Quick summary
 
-You do **not** need to rewrite existing code immediately.
+Before changing call sites, bump TurnKit to the latest version and run your
+test suite against the new release.
+
+```ruby
+# Gemfile
+gem "turnkit", "~> 0.2.8"
+```
+
+```sh
+bundle update turnkit
+```
+
+Use workflows for reusable autonomous task runners.
 
 Recommended new forms:
 
@@ -17,21 +31,10 @@ TurnKit.configure do |config|
   config.max_spend = 0.25
 end
 
-fleet = TurnKit.fleet("brief_writer", tools: [WebSearch, SaveBrief])
-run = fleet.run("Create a source-grounded brief.", input: { topic: "Rails 8" })
+workflow = TurnKit::Workflow.new(name: "brief_writer", tools: [WebSearch, SaveBrief])
+run = workflow.run("Create a source-grounded brief.", input: { topic: "Rails 8" })
 
 puts run.output
-```
-
-Old forms still work:
-
-```ruby
-TurnKit.default_model = "gpt-5.2"
-
-fleet = TurnKit::Fleet.new(name: "brief_writer", tools: [WebSearch, SaveBrief])
-run = fleet.run(task: "Create a source-grounded brief.", input: { topic: "Rails 8" })
-
-puts run.output_text
 ```
 
 ## Configuration
@@ -112,7 +115,8 @@ puts run.output
 ```
 
 The keyword form still works. The positional string is the recommended form for
-the common case.
+the common case. `Agent#run` uses task prompt behavior by default; pass
+`prompt_mode: :full` if you need conversation-style prompt behavior for a run.
 
 ### Pending runs
 
@@ -130,10 +134,10 @@ The existing keyword form remains valid:
 run = agent.run(task: "Classify later.", async: true)
 ```
 
-## Fleets
+## Workflows
 
-The fleet mental model changed from “many agents” to “one reusable autonomous
-task runtime.” A fleet packages:
+The preferred name for reusable autonomous task runtimes is now workflow. A
+workflow packages:
 
 - one task-mode orchestrator
 - workflow skills
@@ -144,10 +148,8 @@ task runtime.” A fleet packages:
 
 ### Construction
 
-Before:
-
 ```ruby
-fleet = TurnKit::Fleet.new(
+workflow = TurnKit::Workflow.new(
   name: "sales_enrichment",
   tools: [AccountLookup, WebSearch, SaveEnrichment],
   skills: [sales_research_skill],
@@ -155,51 +157,16 @@ fleet = TurnKit::Fleet.new(
 )
 ```
 
-After:
-
-```ruby
-fleet = TurnKit.fleet(
-  "sales_enrichment",
-  tools: [AccountLookup, WebSearch, SaveEnrichment],
-  skills: [sales_research_skill],
-  max_spend: 0.25
-)
-```
-
-`TurnKit::Fleet.new` remains supported.
-
 ### Running
 
-Before:
-
 ```ruby
-run = fleet.run(
-  task: "Enrich this account for responsible outreach.",
-  input: account.attributes
-)
-```
-
-After:
-
-```ruby
-run = fleet.run(
+run = workflow.run(
   "Enrich this account for responsible outreach.",
   input: account.attributes
 )
 ```
 
 `task:` remains supported.
-
-### Auto-run alias
-
-No behavior change.
-
-```ruby
-run = fleet.auto_run("Enrich this account.", input: account.attributes)
-```
-
-Use `auto_run` when the name helps communicate that the fleet should navigate
-from input to output on its own. It is an alias for `run`.
 
 ## Run inspection
 
@@ -285,10 +252,10 @@ agent = TurnKit::Agent.new(tools: [WebSearch.new(client: client)])
 This is the recommended pattern for API clients, test doubles, and per-tenant
 dependencies.
 
-## Multi-agent fleets
+## Multi-agent workflows
 
 If you previously modeled every role as a separate agent, consider migrating the
-default path to one fleet with a workflow skill.
+default path to one workflow with a workflow skill.
 
 Before:
 
@@ -315,8 +282,8 @@ workflow = TurnKit::Skill.new(
   TEXT
 )
 
-fleet = TurnKit.fleet(
-  "source_brief",
+source_brief = TurnKit::Workflow.new(
+  name: "source_brief",
   skills: [workflow],
   tools: [WebSearch, ReadWebPage, SaveBrief],
   max_spend: 0.25,
@@ -336,11 +303,11 @@ Keep separate agents when the isolation is worth the extra model calls:
 
 1. Replace `TurnKit.default_model =` with `TurnKit.model =` in app-level config.
 2. Wrap global settings in `TurnKit.configure` if you have more than one.
-3. Replace `TurnKit::Fleet.new(name: ...)` with `TurnKit.fleet("...")` in new code.
+3. Use `TurnKit::Workflow.new(name: "...")` for reusable autonomous task runners.
 4. Replace `run(task: "...")` with `run("...")` where it improves readability.
 5. Replace `run.output_text` with `run.output` in application code.
 6. Replace save/action tool overrides with `terminal!` when convenient.
-7. Consider collapsing role-agent fleets into one fleet plus workflow skills if
+7. Consider collapsing role-agent workflows into one workflow plus workflow skills if
    cost or complexity is a concern.
 
-None of these steps are required for existing code to keep working.
+Run your test suite after migrating call sites.

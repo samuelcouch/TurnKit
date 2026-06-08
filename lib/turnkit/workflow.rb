@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
+require_relative "agent"
+
 module TurnKit
-  class Fleet
+  class Workflow
     attr_reader :name, :description, :instructions, :tools, :skills, :available_skills
     attr_reader :model, :client, :store, :prompt_mode, :thinking, :compaction, :output_schema
     attr_reader :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions
@@ -21,7 +23,7 @@ module TurnKit
       limits.
     TEXT
 
-    def initialize(name: "orchestrator", description: "", instructions: nil,
+    def initialize(name: "workflow", description: "", instructions: nil,
       tools: [], skills: [], available_skills: [], model: nil, client: nil,
       store: nil, prompt_mode: :task, thinking: nil, compaction: nil,
       output_schema: nil, max_iterations: nil, timeout: nil, max_spend: nil,
@@ -64,9 +66,6 @@ module TurnKit
       )
     end
 
-    alias_method :auto_run, :run
-    alias_method :autorun, :run
-
     def agent(**options)
       build_agent(**options)
     end
@@ -101,5 +100,4 @@ module TurnKit
         Agent.new(**attrs)
       end
   end
-
 end

@@ -1,9 +1,9 @@
-# Fleet Researcher Example
+# Workflow Researcher Example
 
-This example shows the recommended TurnKit fleet pattern:
+This example shows the recommended TurnKit workflow pattern:
 
 ```text
-fleet = one task-mode orchestrator + workflow skill + reusable tools + guardrails
+workflow = one task-mode orchestrator + workflow skill + reusable tools + guardrails
 ```
 
 It intentionally does **not** create separate `researcher`, `writer`, and
@@ -12,7 +12,7 @@ conversation with normal TurnKit tool calls.
 
 It demonstrates:
 
-- `TurnKit.fleet`
+- `TurnKit::Workflow`
 - workflow skills as reusable orchestration patterns
 - tool instances with constructor-injected clients
 - `prompt_mode: :task`
@@ -44,7 +44,7 @@ reading tool calls will fail with a clear error.
 Basic run:
 
 ```sh
-bundle exec ruby examples/fleet_researcher/fleet_researcher.rb \
+bundle exec ruby examples/workflow_researcher/workflow_researcher.rb \
   "Create a source-grounded brief on Rails 8 Solid Queue for a Rails founder."
 ```
 
@@ -54,39 +54,39 @@ A more complex run:
 TURNKIT_MAX_SPEND=0.75 \
 TURNKIT_MAX_ITERATIONS=25 \
 TURNKIT_MAX_TOOL_EXECUTIONS=50 \
-bundle exec ruby examples/fleet_researcher/fleet_researcher.rb \
+bundle exec ruby examples/workflow_researcher/workflow_researcher.rb \
   "Create a source-grounded 10 bullet brief on the Rails 8 Solid Queue docs for a Rails founder. Include at least 5 bullets on who wrote Solid Queue and what inspired it. Fact-check every claim."
 ```
 
 Add deep monitoring:
 
 ```sh
-DEEP_MONITORING=1 bundle exec ruby examples/fleet_researcher/fleet_researcher.rb \
+DEEP_MONITORING=1 bundle exec ruby examples/workflow_researcher/workflow_researcher.rb \
   "Create a source-grounded brief on Rails 8 Solid Queue for a Rails founder."
 ```
 
-## How the fleet works
+## How the workflow works
 
-The fleet packages a single orchestrator runtime:
+The workflow packages a single orchestrator runtime:
 
 ```ruby
-workflow = TurnKit::Skill.new(
+source_grounded_brief = TurnKit::Skill.new(
   key: "source_grounded_brief",
   name: "Source Grounded Brief",
   content: "Research, build an evidence pack, draft, verify, revise, finalize."
 )
 
-fleet = TurnKit.fleet(
-  "source_brief_orchestrator",
-  skills: [workflow],
-  tools: FleetResearcher.web_tools,
+workflow = TurnKit::Workflow.new(
+  name: "source_brief_orchestrator",
+  skills: [source_grounded_brief],
+  tools: WorkflowResearcher.web_tools,
   max_spend: 0.50,
   max_iterations: 15,
   max_tool_executions: 30,
   compaction: { context_limit: 64_000, threshold: 0.75 }
 )
 
-run = fleet.run(
+run = workflow.run(
   "Create a source-grounded brief for the request.",
   input: { request: request }
 )
@@ -107,11 +107,11 @@ The web tools are plain Ruby objects. They build their client from
 or custom configuration:
 
 ```ruby
-tools = FleetResearcher.web_tools
+tools = WorkflowResearcher.web_tools
 
 # or
-client = FleetResearcher::ParallelClient.new(api_key: "...")
-tools = FleetResearcher.web_tools(parallel_client: client)
+client = WorkflowResearcher::ParallelClient.new(api_key: "...")
+tools = WorkflowResearcher.web_tools(parallel_client: client)
 ```
 
 ## When to use separate agents

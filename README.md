@@ -4,7 +4,8 @@
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1-red.svg)](https://www.ruby-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.md)
 
-Build durable Ruby and Rails agents with tools, skills, sub-agents, and persistence.
+Build durable Ruby and Rails agents with conversations, runs, workflows, tools,
+skills, sub-agents, and persistence.
 
 ## Installation
 
@@ -57,6 +58,13 @@ puts run.output
 
 ## Usage
 
+For runnable, API-key-free examples of the three core entry points, see
+[`examples/core_api`](examples/core_api):
+
+- conversation: durable thread over time;
+- agent run: one bounded application task;
+- workflow: reusable task runner with skills, tools, and limits.
+
 ### Models
 
 Set a model:
@@ -92,6 +100,23 @@ Use these common providers:
 
 Expect `TurnKit::ModelAccessError` for obvious key mistakes.
 
+To run eligible coding tasks against a ChatGPT Plus/Pro Codex subscription instead of provider API-key billing, use the Codex adapter. It shells out to the official `codex exec` CLI, so authenticate Codex first:
+
+```sh
+codex login --device-auth
+```
+
+Then configure TurnKit:
+
+```ruby
+TurnKit.configure do |config|
+  config.client = TurnKit::Adapters::Codex.new(sandbox: "read-only")
+  config.model = "gpt-5.4"
+end
+```
+
+The Codex adapter does not store ChatGPT tokens or read `~/.codex/auth.json` directly. It reuses Codex CLI auth and records token usage with no TurnKit provider cost, because usage is charged against the user's ChatGPT/Codex plan limits.
+
 ### Conversations
 
 Create a conversation:
@@ -118,10 +143,13 @@ turn = conversation.run!
 puts turn.output_text
 ```
 
-### Application Tasks
+### Runs
 
-Use `Agent#run` when your application is executing a task instead of chatting
-with a user:
+Use `Agent#run` when your application needs one non-interactive result. A run is
+the AI equivalent of a service object call: one input, one job, one output.
+
+Reach for a run when the task is bounded, such as classification, extraction,
+summarization, routing, scoring, or structured JSON generation.
 
 ```ruby
 agent = TurnKit::Agent.new(
@@ -135,7 +163,6 @@ agent = TurnKit::Agent.new(
     },
     required: ["priority", "reason"]
   },
-  prompt_mode: :task
 )
 
 run = agent.run(
@@ -146,8 +173,10 @@ run = agent.run(
 puts run.output_data
 ```
 
-`Agent#run` is a small wrapper over TurnKit's existing conversation and turn
-engine. Existing `conversation.ask` usage is still supported.
+`Agent#run` uses task prompt behavior by default: it treats the input as the
+contract, avoids follow-up questions, and returns the best result it can. It is a
+small wrapper over TurnKit's existing conversation and turn engine. Existing
+`conversation.ask` usage is still supported for multi-turn threads.
 
 Prepare a pending run without calling the model:
 
@@ -157,18 +186,22 @@ request = run.preview
 run.run!
 ```
 
-### Fleets
+### Workflows
 
-Use a fleet when you want to package a reusable autonomous workflow: one
-task-mode orchestrator, workflow skills, tools, defaults, and guardrails. A
-fleet is not a requirement for multi-agent work; it is the reusable runtime for
-getting from input to output.
+Use a workflow when a run graduates into a reusable production capability: a
+named task runner with workflow skills, tools, defaults, guardrails, compaction,
+and output policy.
+
+Workflows fight for their life when the task has a repeatable operating
+procedure: inspect app data, gather context, use sources, draft, verify, save,
+and stop under budget. They are overkill for simple classification or extraction
+runs.
 
 ```ruby
 source_grounded_brief = TurnKit::Skill.from_file("app/ai/skills/source_grounded_brief.md")
 
-fleet = TurnKit.fleet(
-  "brief_writer",
+workflow = TurnKit::Workflow.new(
+  name: "brief_writer",
   instructions: "Create source-grounded briefs and verify claims before final output.",
   skills: [source_grounded_brief],
   tools: [WebSearch.new, ReadWebPage.new, SaveBrief],
@@ -181,7 +214,7 @@ fleet = TurnKit.fleet(
   }
 )
 
-run = fleet.run(
+run = workflow.run(
   "Create a source-grounded brief.",
   input: { topic: "Rails 8 Solid Queue" }
 )
@@ -198,11 +231,36 @@ model-tool loop:
 model → tool → result → model → tool → result → final
 ```
 
-`auto_run` is an alias for `run` when you want the name to emphasize autonomous
-execution:
+For repeated workflows, keep instructions, skills, and tools stable and pass the
+per-run data through `input:`. This gives provider prompt caching the best chance
+to reuse the stable workflow prompt while each run supplies dynamic data.
+
+### Choosing runs, conversations, and workflows
+
+Use the smallest entry point that matches the shape of work:
+
+| Entry point | Use when | Tradeoffs |
+| --- | --- | --- |
+| `Conversation` | A user or app will keep adding messages over time. | Best for durable threads and follow-up steering; history grows, so long threads need compaction. |
+| `Agent#run` | Your app needs one bounded result now. | Best for simple production tasks; repeated complex policies can sprawl across callers. |
+| `TurnKit::Workflow` | A task becomes a named reusable workflow with tools, skills, limits, and observability. | Best cache and packaging story for repeated autonomous work; overkill for one-off/simple tasks. |
+
+Prompt caching and compaction solve different problems:
+
+- prompt caching reduces the cost of repeated stable instructions, tools, and
+  skills;
+- compaction reduces the cost of long dynamic histories;
+- budgets (`max_spend`, `max_iterations`, `max_tool_executions`) keep autonomous
+  loops bounded.
+
+Reach for separate agents and `sub_agents` only when the isolation is worth the
+extra model calls, such as different models, different tool permissions,
+parallel specialist review, or separate durable child conversations.
+
+Run a workflow with `run`:
 
 ```ruby
-run = fleet.auto_run(
+run = workflow.run(
   "Create compliant outreach for this account.",
   input: lead.attributes,
   max_spend: 0.25,
@@ -214,10 +272,6 @@ run = fleet.auto_run(
   }
 )
 ```
-
-Reach for separate agents and `sub_agents` only when the isolation is worth the
-extra model calls, such as different models, different tool permissions,
-parallel specialist review, or separate durable child conversations.
 
 Use `terminal!` for save or action tools that complete the run:
 
@@ -491,7 +545,7 @@ TurnKit.reconcile_stale!
 | `TurnKit.max_depth` | Limit sub-agent depth. |
 | `TurnKit.max_tool_executions` | Limit tool calls per turn. |
 | `TurnKit.timeout` | Limit turn runtime. |
-| `TurnKit.cost_limit` | Limit estimated turn cost. |
+| `TurnKit.max_spend` | Limit estimated turn cost. |
 | `TurnKit.compaction` | Configure context compaction. |
 | `TurnKit.on_event` | Subscribe to lifecycle events. |
 
@@ -499,9 +553,13 @@ Set options globally:
 
 ```ruby
 TurnKit.default_model = "gpt-4.1-mini"
+TurnKit.max_spend = 0.25
 TurnKit.max_iterations = 25
 TurnKit.timeout = 300
 ```
+
+`TurnKit.cost_limit` remains supported as the internal/legacy name for
+`max_spend`.
 
 Set options per agent:
 

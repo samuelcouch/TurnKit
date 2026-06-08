@@ -2,11 +2,11 @@
 
 ## 0.2.8 - 2026-06-08
 
-- Add autonomous task fleets as reusable single-orchestrator runtimes with workflow skills, tools, guardrails, compaction, and run monitoring.
-- Add `Agent#run` and `TurnKit::Run` for non-interactive application tasks.
-- Improve task-runtime DX with `TurnKit.configure`, `TurnKit.model`, `TurnKit.max_spend`, `TurnKit.fleet`, positional `run("task")`, `run.output`, `run.tool_calls`, and `Tool.terminal!`.
+- Add `TurnKit::Workflow` for reusable single-orchestrator task runtimes with workflow skills, tools, guardrails, compaction, and run monitoring.
+- Add `Agent#run` and `TurnKit::Run` for non-interactive application tasks, with task prompt behavior by default.
+- Improve task-runtime DX with `TurnKit.configure`, `TurnKit.model`, `TurnKit.max_spend`, `TurnKit::Workflow`, positional `run("task")`, `run.output`, `run.tool_calls`, and `Tool.terminal!`.
 - Support tool instances with constructor-injected dependencies.
-- Add a fleet researcher example and upgrade guide.
+- Add a workflow researcher example and upgrade guide.
 
 ## 0.2.6 - 2026-06-07
 

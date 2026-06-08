@@ -157,6 +157,7 @@ class TurnKitTest < Minitest::Test
     assert_equal schema, client.calls.first.fetch(:output_schema)
     assert_includes client.calls.first.fetch(:messages).first.fetch(:content), "Classify this lead"
     assert_includes client.calls.first.fetch(:messages).first.fetch(:content), "ACME"
+    assert_includes client.calls.first.fetch(:instructions), "executing an application task"
     assert_equal [ TurnKit.store.load_turn(run.id) ], run.turn_records
   end
 
@@ -189,13 +190,13 @@ class TurnKitTest < Minitest::Test
     assert_equal "done", run.output_text
   end
 
-  def test_fleet_runs_one_orchestrator_with_tools_and_skills
+  def test_workflow_runs_one_orchestrator_with_tools_and_skills
     skill = TurnKit::Skill.new(key: "verify", name: "Verify", content: "Verify the tool result before final output.")
     client = FakeClient.new(
       TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "call_1", name: "status_tool", arguments: { id: "st_1" }) ]),
       TurnKit::Result.new(text: "status is ok")
     )
-    fleet = TurnKit::Fleet.new(
+    workflow = TurnKit::Workflow.new(
       name: "support_orchestrator",
       tools: [StatusTool],
       skills: [skill],
@@ -205,7 +206,7 @@ class TurnKitTest < Minitest::Test
       compaction: { context_limit: 1_000 }
     )
 
-    run = fleet.run(task: "Check status", input: { id: "st_1" })
+    run = workflow.run(task: "Check status", input: { id: "st_1" })
 
     assert run.completed?
     assert_equal "status is ok", run.output_text
@@ -217,16 +218,16 @@ class TurnKitTest < Minitest::Test
     assert_equal({ context_limit: 1_000 }, run.turn.agent.compaction)
   end
 
-  def test_turnkit_fleet_factory_and_plain_run_api
+  def test_workflow_plain_run_api_uses_global_configuration
     TurnKit.configure do |config|
       config.model = "model-b"
       config.max_spend = 0.25
     end
 
     client = FakeClient.new(TurnKit::Result.new(text: "finished"))
-    fleet = TurnKit.fleet("research", client: client)
+    workflow = TurnKit::Workflow.new(name: "research", client: client)
 
-    run = fleet.run("Create a brief")
+    run = workflow.run("Create a brief")
 
     assert run.completed?
     assert_equal "finished", run.output
@@ -236,6 +237,19 @@ class TurnKitTest < Minitest::Test
   ensure
     TurnKit.default_model = "test-model"
     TurnKit.cost_limit = nil
+  end
+
+  def test_workflow_is_preferred_task_runner_api
+    client = FakeClient.new(TurnKit::Result.new(text: "finished"))
+    workflow = TurnKit::Workflow.new(name: "research", client: client)
+
+    run = workflow.run("Create a brief")
+
+    assert_instance_of TurnKit::Workflow, workflow
+    assert run.completed?
+    assert_equal "finished", run.output
+    assert_includes client.calls.first.fetch(:instructions), "autonomous task orchestrator"
+    assert_includes client.calls.first.fetch(:instructions), "executing an application task"
   end
 
   def test_terminal_tool_macro_marks_tool_as_turn_ending
@@ -252,22 +266,11 @@ class TurnKitTest < Minitest::Test
     assert_equal "Saved note_1.", klass.completion_message({ "id" => "note_1" })
   end
 
-  def test_fleet_auto_run_alias_uses_same_single_orchestrator_runtime
-    client = FakeClient.new(TurnKit::Result.new(text: "final"))
-    fleet = TurnKit::Fleet.new(name: "brief_writer", client: client)
-
-    run = fleet.auto_run(task: "Create a brief")
-
-    assert run.completed?
-    assert_equal [ "brief_writer" ], run.turn_records.map { |record| record.fetch("agent_name") }
-    assert_equal "final", run.output_text
-  end
-
-  def test_fleet_auto_run_honors_max_spend_guardrail
+  def test_workflow_run_honors_max_spend_guardrail
     expensive_client = FakeClient.new(TurnKit::Result.new(text: "too much", usage: TurnKit::Usage.new(cost: 0.02)))
-    fleet = TurnKit::Fleet.new(client: expensive_client)
+    workflow = TurnKit::Workflow.new(client: expensive_client)
 
-    run = fleet.auto_run(task: "Do expensive work", max_spend: 0.01)
+    run = workflow.run(task: "Do expensive work", max_spend: 0.01)
 
     assert run.failed?
     error = TurnKit.store.load_turn(run.id).fetch("error")
@@ -292,13 +295,23 @@ class TurnKitTest < Minitest::Test
 
   def test_task_prompt_mode_uses_non_interactive_behavior
     client = FakeClient.new(TurnKit::Result.new(text: "done"))
-    agent = TurnKit::Agent.new(name: "worker", prompt_mode: :task, client: client)
+    agent = TurnKit::Agent.new(name: "worker", client: client)
 
     agent.run(task: "Classify this lead")
 
     instructions = client.calls.first.fetch(:instructions)
     assert_includes instructions, "executing an application task"
     assert_includes instructions, "Do not ask follow-up questions"
+  end
+
+  def test_agent_run_can_override_task_prompt_mode
+    client = FakeClient.new(TurnKit::Result.new(text: "done"))
+    agent = TurnKit::Agent.new(name: "worker", client: client)
+
+    agent.run(task: "Classify this lead", prompt_mode: :full)
+
+    instructions = client.calls.first.fetch(:instructions)
+    refute_includes instructions, "executing an application task"
   end
 
   def test_ruby_llm_adapter_normalizes_output_schema_for_strict_providers
@@ -1105,6 +1118,69 @@ class TurnKitTest < Minitest::Test
       tool_class.new.execute
     end
     assert_includes error.message, "tools must be executed by TurnKit turns"
+  end
+
+  def test_codex_adapter_uses_codex_exec_and_records_subscription_usage_without_cost
+    calls = []
+    runner = lambda do |command, stdin_data:, chdir:|
+      calls << { command: command, stdin_data: stdin_data, chdir: chdir }
+      output_path = command[command.index("-o") + 1]
+      File.write(output_path, "Codex answer")
+      stdout = [
+        { type: "thread.started", thread_id: "thread_1" },
+        { type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 40, output_tokens: 12, reasoning_output_tokens: 3 } }
+      ].map(&:to_json).join("\n")
+      [ stdout, "", TurnKit::Adapters::Codex::Status.new(successful: true) ]
+    end
+    adapter = TurnKit::Adapters::Codex.new(command: "codex", runner: runner)
+
+    result = adapter.chat(
+      model: "gpt-5.4",
+      messages: [ { role: "user", content: "Fix the bug" } ],
+      tools: [],
+      instructions: "You are a coding agent."
+    )
+
+    assert_equal "Codex answer", result.text
+    assert_equal "gpt-5.4", result.model
+    assert_equal 60, result.usage.input_tokens
+    assert_equal 40, result.usage.cached_tokens
+    assert_equal 12, result.usage.output_tokens
+    assert_equal 3, result.usage.thinking_tokens
+    assert_nil result.usage.cost
+    assert_equal [ "codex", "exec", "--json", "--sandbox", "read-only", "--model", "gpt-5.4" ], calls.first.fetch(:command).first(7)
+    assert_includes calls.first.fetch(:stdin_data), "System instructions:\nYou are a coding agent."
+    assert_includes calls.first.fetch(:stdin_data), "user:\nFix the bug"
+  end
+
+  def test_codex_adapter_supports_structured_output_schema
+    schema = {
+      type: "object",
+      properties: { verdict: { type: "string" } },
+      required: [ "verdict" ],
+      additionalProperties: false
+    }
+    runner = lambda do |command, stdin_data:, chdir:|
+      schema_path = command[command.index("--output-schema") + 1]
+      output_path = command[command.index("-o") + 1]
+      assert_equal JSON.parse(JSON.generate(schema)), JSON.parse(File.read(schema_path))
+      File.write(output_path, { verdict: "ok" }.to_json)
+      [ "", "", TurnKit::Adapters::Codex::Status.new(successful: true) ]
+    end
+    adapter = TurnKit::Adapters::Codex.new(runner: runner)
+
+    result = adapter.chat(model: "codex", messages: [ { role: "user", content: "Review" } ], tools: [], instructions: "", output_schema: schema)
+
+    assert_equal({ "verdict" => "ok" }, result.output_data)
+  end
+
+  def test_codex_adapter_rejects_turnkit_tools
+    adapter = TurnKit::Adapters::Codex.new(runner: ->(*) { raise "should not run" })
+
+    error = assert_raises(TurnKit::ToolError) do
+      adapter.chat(model: "codex", messages: [], tools: [ ContextCheckingTool ], instructions: "")
+    end
+    assert_includes error.message, "TurnKit tools are not supported"
   end
 
   def test_ruby_llm_adapter_configures_provider_keys_from_environment
