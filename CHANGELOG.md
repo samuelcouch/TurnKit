@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - 2026-06-10
+
+- Make the task-runtime API skills-first and intentionally breaking: `max_spend` is the only spend-limit name and output validation is exposed as `output_policy` / `policy_audit`.
+- Store message content as ordered typed parts, with text derived from content and tool calls/results persisted in the transcript instead of metadata.
+- Add `load_skill` for progressively disclosed available skills.
+- Add output-policy revision loops with `output_retries`, including skill/policy rehydration in revision prompts.
+- Add deterministic `input_schema` validation before turns are created.
+- Ensure terminal tools never orphan sibling tool calls; skipped siblings receive cancelled executions and tool-result messages.
+- Add turn claiming, tool-runner heartbeats, persisted budget resume, and sub-agent failure details.
+
 ## 0.2.10 - 2026-06-10
 
 - Add output audits and file-backed output policies for validating final run output.

@@ -50,7 +50,6 @@ class CreateTurnkitTables < ActiveRecord::Migration[7.1]
       t.string :kind, null: false
       t.integer :sequence, null: false
       t.json :content, null: false, default: []
-      t.text :text
       t.string :tool_execution_uid
       t.string :provider_message_id
       t.json :metadata, null: false, default: {}

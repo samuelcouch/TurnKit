@@ -6,7 +6,7 @@ module TurnKit
     KINDS = %w[text tool_call tool_result context_summary].freeze
 
     attr_reader :id, :conversation_id, :turn_id, :role, :kind, :sequence
-    attr_reader :content, :text, :tool_execution_id, :provider_message_id, :metadata, :created_at
+    attr_reader :content, :tool_execution_id, :provider_message_id, :metadata, :created_at
 
     def initialize(attributes = {})
       attrs = stringify(attributes)
@@ -16,8 +16,7 @@ module TurnKit
       @role = attrs.fetch("role").to_s
       @kind = attrs.fetch("kind", "text").to_s
       @sequence = attrs.fetch("sequence").to_i
-      @content = normalize_content(attrs["content"] || attrs["text"])
-      @text = attrs["text"] || extract_text(@content)
+      @content = normalize_content(attrs["content"].nil? ? attrs["text"] : attrs["content"])
       @tool_execution_id = attrs["tool_execution_id"]
       @provider_message_id = attrs["provider_message_id"]
       @metadata = attrs["metadata"] || {}
@@ -35,7 +34,6 @@ module TurnKit
         "kind" => kind,
         "sequence" => sequence,
         "content" => content,
-        "text" => text,
         "tool_execution_id" => tool_execution_id,
         "provider_message_id" => provider_message_id,
         "metadata" => metadata,
@@ -59,6 +57,13 @@ module TurnKit
       kind == "context_summary"
     end
 
+    def text
+      content.filter_map do |part|
+        attrs = stringify(part)
+        attrs["text"] if attrs["type"] == "text"
+      end.join("\n")
+    end
+
     def compaction_metadata
       metadata.fetch("compaction", {})
     end
@@ -69,13 +74,15 @@ module TurnKit
       end
 
       def normalize_content(value)
-        return value if value.is_a?(Array)
+        return Array(value).map { |part| normalize_part(part) } if value.is_a?(Array)
 
         [ { "type" => "text", "text" => value.to_s } ]
       end
 
-      def extract_text(blocks)
-        Array(blocks).filter_map { |block| block.is_a?(Hash) ? block["text"] || block[:text] : nil }.join("\n")
+      def normalize_part(part)
+        attrs = part.respond_to?(:to_h) ? part.to_h.transform_keys(&:to_s) : { "type" => "text", "text" => part.to_s }
+        attrs["type"] ||= "text"
+        attrs
       end
 
       def validate!

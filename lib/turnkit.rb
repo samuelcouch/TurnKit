@@ -15,6 +15,7 @@ require_relative "turnkit/cost"
 require_relative "turnkit/budget"
 require_relative "turnkit/event"
 require_relative "turnkit/model_request"
+require_relative "turnkit/schema_check"
 require_relative "turnkit/agent"
 require_relative "turnkit/workflow"
 require_relative "turnkit/client"
@@ -36,6 +37,7 @@ require_relative "turnkit/tool"
 require_relative "turnkit/tool_call"
 require_relative "turnkit/tool_execution"
 require_relative "turnkit/sub_agent_tool"
+require_relative "turnkit/load_skill_tool"
 require_relative "turnkit/message_projection"
 require_relative "turnkit/tool_runner"
 require_relative "turnkit/turn"
@@ -52,7 +54,7 @@ module TurnKit
     attr_accessor :default_model, :client, :store, :logger
     attr_accessor :max_iterations, :timeout, :max_depth, :max_tool_executions
     attr_accessor :max_tool_executions_by_name
-    attr_accessor :cost_limit, :prompt_cache
+    attr_accessor :max_spend, :prompt_cache
     attr_accessor :compaction
     attr_accessor :output_policy_model, :output_policy_thinking
     attr_accessor :cost_rates, :cost_calculator
@@ -72,6 +74,7 @@ module TurnKit
   self.max_depth = 3
   self.max_tool_executions = 100
   self.max_tool_executions_by_name = {}
+  self.max_spend = nil
   self.prompt_cache = :auto
   self.compaction = true
   self.cost_rates = {}
@@ -97,21 +100,13 @@ module TurnKit
     self.default_model = value
   end
 
-  def self.max_spend
-    cost_limit
-  end
-
-  def self.max_spend=(value)
-    self.cost_limit = value
-  end
-
   def self.reconcile_stale!(before: Clock.now - (timeout || 300))
     store.find_stale_turns(before: before).each do |turn|
       store.update_turn(turn.fetch("id"), "status" => "stale", "completed_at" => Clock.now)
     end
   end
 
-  def self.audit_output(output, constraints: [], context: {})
+  def self.check_output_policy(output, constraints: [], context: {})
     OutputAudit.check(output, constraints: constraints, context: context)
   end
 end

@@ -4,26 +4,59 @@ $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 
 require "benchmark"
 require "json"
+require "net/http"
+require "uri"
 require "turnkit"
 
 module AmazonMemoWriter
   DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5")
-  DEFAULT_TASK = "Write a memo recommending whether TurnKit should create an enterprise onboarding support lane. Audience: founder and product lead. Decision deadline: this week."
+  DEFAULT_TASK = "Write a memo recommending whether PhotoDay should add bib-number photo search for race events. Audience: founder and product lead. Decision deadline: this week."
 
-  SOURCES = {
-    "https://example.com/customer-support-latency" => {
-      title: "Support Latency Benchmark",
-      excerpt: "Enterprise customers abandon onboarding when first-response time exceeds 24 hours. Median B2B support response is 18 hours. Teams that add onboarding-specific routing reduce time-to-first-response by 35%."
-    },
-    "https://example.com/amazon-prfaq" => {
-      title: "Working Backwards PR/FAQ Notes",
-      excerpt: "Amazon-style decision memos explain the customer problem, make one explicit recommendation, use narrative paragraphs instead of tables, and include risks plus open questions."
-    },
-    "https://example.com/onboarding-economics" => {
-      title: "Onboarding Economics Study",
-      excerpt: "For enterprise software, implementation delays in the first 30 days are correlated with lower expansion intent. Customers cite unclear ownership and slow responses as top causes."
-    }
-  }.freeze
+  class ParallelClient
+    API_BASE = "https://api.parallel.ai"
+
+    def initialize(api_key: ENV["PARALLEL_API_KEY"], api_base: API_BASE, open_timeout: 5, read_timeout: 45)
+      @api_key = api_key
+      @api_base = api_base
+      @open_timeout = open_timeout
+      @read_timeout = read_timeout
+    end
+
+    def search(objective:, search_queries:)
+      post("/v1/search", {
+        objective: objective,
+        search_queries: Array(search_queries)
+      })
+    end
+
+    def read_page(url:, objective:)
+      post("/v1/extract", {
+        urls: [ url.to_s ],
+        objective: objective
+      })
+    end
+
+    private
+      def post(path, payload)
+        raise ArgumentError, "PARALLEL_API_KEY is required for Amazon memo web tools" if @api_key.to_s.empty?
+
+        uri = URI.join(@api_base, path)
+        request = Net::HTTP::Post.new(uri)
+        request["Content-Type"] = "application/json"
+        request["x-api-key"] = @api_key
+        request.body = JSON.generate(payload)
+
+        response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https", open_timeout: @open_timeout, read_timeout: @read_timeout) do |http|
+          http.request(request)
+        end
+
+        body = response.body.to_s.empty? ? {} : JSON.parse(response.body)
+        return body if response.is_a?(Net::HTTPSuccess)
+
+        message = body.is_a?(Hash) ? body.dig("error", "message") : nil
+        raise "Parallel API #{response.code}: #{message || response.body}"
+      end
+  end
 
   class AmazonMemo
     EM_DASH = "—"
@@ -134,7 +167,7 @@ module AmazonMemoWriter
       MARKDOWN
     end
 
-    def self.rendered_violations(output, expected_sources: SOURCES.keys)
+    def self.rendered_violations(output, expected_sources: nil)
       violations = []
       required = [
         "# ",
@@ -178,9 +211,9 @@ module AmazonMemoWriter
         numbered_section_violations(output, heading).each { |message| violations << message }
       end
 
-      cited_sources = expected_sources.select { |url| output.include?(url) }
-      if cited_sources.length < 2
-        violations << violation("insufficient_sources", "expected at least two cited read sources, got #{cited_sources.length}")
+      cited_sources = Array(expected_sources).empty? ? urls_in(output) : expected_sources.select { |url| output.include?(url) }
+      if cited_sources.uniq.length < 2
+        violations << violation("insufficient_sources", "expected at least two cited sources, got #{cited_sources.uniq.length}")
       end
 
       tldr = output[/## TL;DR\s*\n(.+?)\n\n/m, 1].to_s.strip
@@ -231,6 +264,10 @@ module AmazonMemoWriter
       value.to_s.split(/\n{2,}/).map(&:strip).reject(&:empty?)
     end
 
+    def self.urls_in(output)
+      output.to_s.scan(%r{https?://[^\s)]+}).map { |url| url.sub(/[.,;:]\z/, "") }.uniq
+    end
+
     private
       def blank_value?(value)
         return value.strip.empty? if value.is_a?(String)
@@ -266,30 +303,33 @@ module AmazonMemoWriter
   module Tools
     class WebSearch < TurnKit::Tool
       tool_name "web_search"
-      description "Search the web for source candidates with excerpts."
-      usage_hint "Use before writing claims that need external evidence."
+      description "Search the web with Parallel Search and return source candidates with excerpts."
+      usage_hint "Use before writing claims that need external evidence. Prefer official, primary, or high-authority sources that event organizers and photographers can trust."
       parameter :objective, :string, required: true, description: "Research objective."
       parameter :search_queries, :array, required: true, description: "Two or three targeted search queries."
 
+      def initialize(parallel_client: ParallelClient.new)
+        @parallel_client = parallel_client
+      end
+
       def call(objective:, search_queries:, context:)
-        {
-          objective: objective,
-          search_queries: search_queries,
-          results: SOURCES.map { |url, attrs| attrs.merge(url: url) }
-        }
+        @parallel_client.search(objective: objective, search_queries: search_queries)
       end
     end
 
     class ReadWebPage < TurnKit::Tool
       tool_name "read_web_page"
-      description "Read one public web page and return relevant extracted evidence."
+      description "Read one public web page with Parallel Extract and return relevant extracted evidence."
       usage_hint "Use after web_search before citing a URL."
       parameter :url, :string, required: true, description: "URL returned by web_search."
       parameter :objective, :string, required: true, description: "What to extract from the page."
 
+      def initialize(parallel_client: ParallelClient.new)
+        @parallel_client = parallel_client
+      end
+
       def call(url:, objective:, context:)
-        attrs = SOURCES.fetch(url)
-        attrs.merge(url: url, objective: objective)
+        @parallel_client.read_page(url: url, objective: objective).merge("url" => url, "objective" => objective)
       end
     end
 
@@ -333,14 +373,14 @@ module AmazonMemoWriter
           turn.tool_executions.filter_map do |execution|
             next unless execution.completed? && execution.tool_name == "read_web_page"
 
-            execution.result["url"] || execution.result[:url]
+            execution.result["url"] || execution.result[:url] || execution.arguments["url"] || execution.arguments[:url]
           end
         end
     end
   end
 
-  def self.format_policy(output)
-    AmazonMemo.rendered_violations(output)
+  def self.format_policy(output, expected_sources: nil)
+    AmazonMemo.rendered_violations(output, expected_sources: expected_sources)
   end
 
   def self.semantic_policy(model: DEFAULT_MODEL, thinking: { effort: :medium })
@@ -348,22 +388,15 @@ module AmazonMemoWriter
       model: model,
       thinking: thinking,
       content: <<~POLICY
-        This benchmark uses deterministic read_web_page fixture URLs under example.com.
-        Treat these URLs as the source evidence returned by the tools; do not reject
-        the memo merely because the fixture domain is example.com.
-
         The required benchmark skeleton is title, metadata, TL;DR, Customer Problem,
         Current Evidence, Recommendation, Risks and Open Questions, Next Steps, and
         Sources. Treat this skeleton as the source of truth even if generic memo
         guidance would normally put customer problem first or end on risks.
 
-        Read page evidence available to the memo:
-        #{SOURCES.map.with_index { |(url, attrs), index| "#{index + 1}. #{url}: #{attrs.fetch(:excerpt)}" }.join("\n")}
-
         Approve only if the output is an Amazon-style decision memo that:
-        1. is source-grounded in the read page evidence,
+        1. is source-grounded in URLs cited in the Sources section,
         2. makes exactly one clear recommendation,
-        3. explains customer problem, evidence, risks, open questions, and next steps,
+        3. explains the event organizer or photographer problem, evidence, risks, open questions, and next steps,
         4. uses numbered lists only, ordered most important to least important,
         5. contains no em dashes,
         6. uses short paragraphs and clear whitespace,
@@ -372,7 +405,8 @@ module AmazonMemoWriter
     )
   end
 
-  def self.workflow(model: DEFAULT_MODEL, thinking: { effort: :medium }, client: TurnKit::Adapters::RubyLLM.new, on_event: nil, semantic_audit: true)
+  def self.workflow(model: DEFAULT_MODEL, thinking: { effort: :medium }, client: TurnKit::Adapters::RubyLLM.new, parallel_client: ParallelClient.new, on_event: nil, semantic_audit: true)
+    voice = memo_voice_skill
     policies = [ ->(output) { format_policy(output) } ]
     policies << semantic_policy(model: model, thinking: thinking) if semantic_audit
 
@@ -382,14 +416,15 @@ module AmazonMemoWriter
       model: model,
       thinking: thinking,
       client: client,
-      tools: [ Tools::WebSearch, Tools::ReadWebPage, Tools::SubmitAmazonMemo ],
-      skills: [ workflow_skill ],
+      tools: [ Tools::WebSearch.new(parallel_client: parallel_client), Tools::ReadWebPage.new(parallel_client: parallel_client), Tools::SubmitAmazonMemo ],
+      skills: [ workflow_skill, voice ],
       max_iterations: 8,
-      max_tool_executions: 8,
-      max_tool_executions_by_name: { web_search: 1, read_web_page: 3 },
+      max_tool_executions: 12,
+      max_tool_executions_by_name: { web_search: 1, read_web_page: 5 },
       max_spend: Float(ENV.fetch("TURNKIT_MAX_SPEND", "1.00")),
       output_policy: policies,
-      output_policy_mode: ENV.fetch("TURNKIT_OUTPUT_POLICY_MODE", "report").to_sym,
+      output_retries: Integer(ENV.fetch("TURNKIT_OUTPUT_RETRIES", "2")),
+      output_policy_mode: ENV.fetch("TURNKIT_OUTPUT_POLICY_MODE", "fail").to_sym,
       on_event: on_event,
       instructions: <<~TEXT
         Write an Amazon-style memo excerpt for a product decision.
@@ -407,32 +442,25 @@ module AmazonMemoWriter
     )
   end
 
+  def self.memo_voice_skill
+    TurnKit::Skill.from_file(File.join(__dir__, "skills", "memo_voice.md"))
+  end
+
   def self.workflow_skill
-    TurnKit::Skill.new(
-      key: "amazon_style_memo",
-      name: "Amazon Style Memo",
-      description: "Research, draft, and edit strict Amazon-style memos.",
-      content: <<~TEXT
-        Workflow:
-        1. Use web_search first to find source candidates.
-        2. Use read_web_page for at least two sources before citing them.
-        3. Draft from evidence only.
-        4. Edit paragraphs down to short blocks with clear whitespace.
-        5. Rank every list from most important to least important.
-        6. Remove every em dash.
-        7. Finalize by calling submit_amazon_memo with structured fields. Do not output free-form final Markdown yourself.
-      TEXT
-    )
+    TurnKit::Skill.from_file(File.join(__dir__, "skills", "amazon_style_memo.md"))
   end
 
   def self.accuracy(output, run)
+    read_sources = run.tool_calls.select { |tool| tool.tool_name == "read_web_page" && tool.completed? }.filter_map do |tool|
+      tool.result["url"] || tool.arguments["url"]
+    end
     checks = {
       searched_once: run.tool_calls.count { |tool| tool.tool_name == "web_search" && tool.completed? } == 1,
       read_at_least_two_pages: run.tool_calls.count { |tool| tool.tool_name == "read_web_page" && tool.completed? } >= 2,
       finalized_with_submit_tool: run.tool_calls.any? { |tool| tool.tool_name == "submit_amazon_memo" && tool.completed? },
-      strict_format_clean: format_policy(output).empty?,
-      cites_read_sources: SOURCES.keys.count { |url| output.include?(url) } >= 2,
-      audit_clean: run.output_audit_clean?
+      strict_format_clean: format_policy(output, expected_sources: read_sources).empty?,
+      cites_read_sources: read_sources.uniq.count { |url| output.include?(url) } >= 2,
+      audit_clean: run.policy_clean?
     }
     passed = checks.values.count(true)
     {
@@ -440,7 +468,7 @@ module AmazonMemoWriter
       passed: passed,
       total: checks.length,
       checks: checks,
-      format_violations: format_policy(output)
+      format_violations: format_policy(output, expected_sources: read_sources)
     }
   end
 
@@ -465,8 +493,8 @@ module AmazonMemoWriter
       thinking: thinking,
       elapsed_seconds: elapsed.round(2),
       status: run.status,
-      output_audit_clean: run.output_audit_clean?,
-      output_audit: run.output_audit,
+      policy_audit_clean: run.policy_clean?,
+      output_policy: run.policy_audit,
       model_calls: events.count { |event| event.type.end_with?("model.completed") },
       model_call_types: events.select { |event| event.type.end_with?("model.completed") }.map(&:type),
       tool_calls: run.tool_calls.map { |tool| { name: tool.tool_name, status: tool.status, error: tool.error } }.map { |attrs| attrs.compact },

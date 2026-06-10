@@ -36,12 +36,18 @@ module TurnKit
       @on_event = block if block
       return self unless status == "pending"
 
-      update!(status: "running", started_at: Clock.now, heartbeat_at: Clock.now)
+      claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
+      return self unless claimed
+
+      @record = claimed
+      @started_at = @record["started_at"]
       emit("turn.started", status: status, model: model)
       agent.effective_client.validate!(model: model)
+      @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: budget_limits)
+      revisions_used = 0
       loop do
         budget.check!(depth: depth)
-        budget.count_iteration!
+        count_iteration!
         TurnKit::Compaction.maybe_compact!(self)
 
         request = model_request
@@ -58,13 +64,24 @@ module TurnKit
           runner = ToolRunner.new(self)
           terminal = runner.dispatch(result.tool_calls)
           if terminal
-            complete_from_terminal_tool(runner, terminal)
-            break
+            candidate = append_terminal_completion(runner, terminal)
+          else
+            next
           end
         else
-          complete_with_output(result.text, output_data: result.output_data)
-          break
+          candidate = result.text
         end
+
+        audit = check_policy(candidate, output_data: result.output_data)
+        if should_revise?(audit, revisions_used)
+          revisions_used += 1
+          append_revision_message(audit, attempt: revisions_used, terminal_tool_name: terminal&.tool_name)
+          emit("output_policy.revision", violation_count: audit.violations.length, attempt: revisions_used)
+          next
+        end
+
+        complete_with_output(candidate, output_data: result.output_data, audit: audit)
+        break
       end
       reload
       self
@@ -95,8 +112,8 @@ module TurnKit
       @record["output_data"]
     end
 
-    def output_audit
-      (@record["options"] || {})["output_audit"]
+    def policy_audit
+      (@record["options"] || {})["policy_audit"]
     end
 
     def usage
@@ -248,9 +265,9 @@ module TurnKit
           message = conversation.append_message(
             role: "assistant",
             kind: "tool_call",
-            text: result.text,
+            content: result.parts,
             turn_id: id,
-            metadata: { "tool_calls" => result.tool_calls.map { |call| { "id" => call.id, "name" => call.name, "arguments" => call.arguments } } }
+            metadata: {}
           )
           emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
           result.tool_calls.each { |call| emit("tool_call.created", id: call.id, name: call.name) }
@@ -260,24 +277,23 @@ module TurnKit
         end
       end
 
-      def complete_from_terminal_tool(runner, execution)
+      def append_terminal_completion(runner, execution)
         message = runner.completion_message(execution)
         assistant = conversation.append_message(role: "assistant", kind: "text", text: message, turn_id: id)
         emit("message.created", message_id: assistant.id, role: assistant.role, kind: assistant.kind)
-        complete_with_output(message)
+        message
       end
 
-      def complete_with_output(text, output_data: nil)
-        audit = audit_output(text, output_data: output_data)
+      def complete_with_output(text, output_data: nil, audit: nil)
         attrs = { output_text: text, output_data: output_data, completed_at: Clock.now }
-        if audit && !audit.clean? && agent.output_audit_mode == :fail
+        if audit && !audit.clean? && agent.output_policy_mode == :fail
           attrs[:status] = "failed"
-          attrs[:error] = { "class" => "TurnKit::OutputAudit", "message" => audit.messages.join("; "), "output_audit" => audit.to_h }
+          attrs[:error] = { "class" => "TurnKit::OutputAudit", "message" => audit.messages.join("; "), "policy_audit" => audit.to_h }
         else
           attrs[:status] = "completed"
         end
         update!(attrs)
-        persist_output_audit(audit) if audit
+        persist_policy_audit(audit) if audit
 
         if failed?
           emit("turn.failed", error: @record["error"])
@@ -286,18 +302,48 @@ module TurnKit
         end
       end
 
-      def audit_output(text, output_data: nil)
-        constraints = agent.effective_output_audit
+      def check_policy(text, output_data: nil)
+        constraints = agent.effective_output_policy
         return nil if constraints.empty?
 
         output = output_data.nil? ? text : output_data
-        TurnKit.audit_output(output, constraints: constraints, context: { turn: self, output_text: text, output_data: output_data })
+        TurnKit.check_output_policy(output, constraints: constraints, context: { turn: self, output_text: text, output_data: output_data })
       end
 
-      def persist_output_audit(audit)
-        options = (@record["options"] || {}).merge("output_audit" => audit.to_h)
+      def persist_policy_audit(audit)
+        options = (@record["options"] || {}).merge("policy_audit" => audit.to_h)
         update!(options: options)
-        emit("output_audit.completed", clean: audit.clean?, violation_count: audit.violations.length)
+        emit("output_policy.completed", clean: audit.clean?, violation_count: audit.violations.length)
+      end
+
+      def should_revise?(audit, revisions_used)
+        audit && !audit.clean? && revisions_used < agent.output_retries
+      end
+
+      def append_revision_message(audit, attempt:, terminal_tool_name: nil)
+        text = <<~TEXT.strip
+          The previous output failed policy checks.
+
+          Revise the previous output. Do not introduce new claims.
+          Do not deviate from the skill or policy below.
+
+          #{revision_policy_blocks}
+
+          Violations:
+          #{audit.violations.each_with_index.map { |violation, index| "#{index + 1}. #{violation.rule}: #{violation.message}" }.join("\n")}
+          #{terminal_tool_name ? "\nResubmit via #{terminal_tool_name}." : ""}
+        TEXT
+        message = conversation.append_message(role: "user", kind: "text", text: text, turn_id: id, metadata: { "source" => "output_policy", "attempt" => attempt })
+        emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
+      end
+
+      def revision_policy_blocks
+        agent.effective_output_policy.filter_map do |policy|
+          next unless policy.respond_to?(:content)
+
+          key = policy.respond_to?(:name) ? policy.name : "output_policy"
+          "<skill key=\"#{key}\">\n#{policy.content}\n</skill>"
+        end.join("\n\n")
       end
 
       def add_usage!(usage, cost: nil)
@@ -314,6 +360,27 @@ module TurnKit
         attributes = { usage: totals, heartbeat_at: Clock.now }
         attributes[:cost] = @record["cost"].to_f + cost.total if cost&.total
         update!(attributes)
+      end
+
+      def count_iteration!
+        budget.count_iteration!
+        options = (@record["options"] || {}).merge("iterations" => (@record.dig("options", "iterations").to_i + 1))
+        update!(options: options)
+      end
+
+      def heartbeat!
+        update!(heartbeat_at: Clock.now)
+      end
+
+      def budget_limits
+        {
+          max_iterations: agent.max_iterations || TurnKit.max_iterations,
+          timeout: agent.timeout || TurnKit.timeout,
+          max_depth: agent.max_depth || TurnKit.max_depth,
+          max_tool_executions: agent.max_tool_executions || TurnKit.max_tool_executions,
+          max_tool_executions_by_name: agent.max_tool_executions_by_name || TurnKit.max_tool_executions_by_name,
+          max_spend: agent.max_spend || TurnKit.max_spend
+        }
       end
 
       def aggregate_cost(current, cost)

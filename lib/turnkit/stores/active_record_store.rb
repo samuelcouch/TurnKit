@@ -38,7 +38,6 @@ module TurnKit
           kind: message.fetch("kind"),
           sequence: message.fetch("sequence"),
           content: message.fetch("content"),
-          text: message.fetch("text"),
           tool_execution_uid: message["tool_execution_id"],
           provider_message_id: message["provider_message_id"],
           metadata: message.fetch("metadata")
@@ -91,6 +90,15 @@ module TurnKit
       attrs.delete("output_data") unless turn_has_attribute?("output_data")
       record.update!(attrs)
       turn_hash(record)
+    end
+
+    def claim_turn(id, from: "pending", to: "running", **attributes)
+      attrs = Record.turn_update(attributes.merge(status: to))
+      attrs.delete("output_data") unless turn_has_attribute?("output_data")
+      affected = turn_class.where(uid: id, status: from).update_all(attrs.merge(updated_at: Clock.now))
+      return nil if affected.zero?
+
+      load_turn(id)
     end
 
     def list_turns(root_turn_id: nil, conversation_id: nil, agent_name: nil)
@@ -185,7 +193,7 @@ module TurnKit
         {
           "id" => record.uid, "conversation_id" => record.conversation_uid, "turn_id" => record.turn_uid,
           "role" => record.role, "kind" => record.kind, "sequence" => record.sequence, "content" => record.content,
-          "text" => record.text, "tool_execution_id" => record.tool_execution_uid,
+          "tool_execution_id" => record.tool_execution_uid,
           "provider_message_id" => record.provider_message_id, "metadata" => record.metadata || {}, "created_at" => record.created_at
         }
       end

@@ -68,6 +68,17 @@ module TurnKit
       end
     end
 
+    def claim_turn(id, from: "pending", to: "running", **attributes)
+      attrs = Record.turn_update(attributes.merge(status: to))
+      @mutex.synchronize do
+        record = @turns.fetch(id)
+        return nil unless record["status"] == from
+
+        record.merge!(attrs.merge("updated_at" => Clock.now))
+        duplicate(record)
+      end
+    end
+
     def list_turns(root_turn_id: nil, conversation_id: nil, agent_name: nil)
       @mutex.synchronize do
         rows = @turns.values

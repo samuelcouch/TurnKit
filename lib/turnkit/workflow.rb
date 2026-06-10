@@ -4,13 +4,7 @@ require_relative "agent"
 
 module TurnKit
   class Workflow
-    attr_reader :name, :description, :instructions, :tools, :skills, :available_skills
-    attr_reader :model, :client, :store, :prompt_mode, :thinking, :compaction, :output_schema
-    attr_reader :on_event
-    attr_reader :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions, :max_tool_executions_by_name
-    attr_reader :output_audit, :output_audit_mode, :output_policy, :output_policy_mode, :output_policy_model, :output_policy_thinking
-
-    DEFAULT_INSTRUCTIONS = <<~TEXT.strip
+    ORCHESTRATOR_PREAMBLE = <<~TEXT.strip
       You are an autonomous task orchestrator. Navigate from the application
       request to a final output without asking the user follow-up questions.
 
@@ -29,104 +23,36 @@ module TurnKit
       limits.
     TEXT
 
-    def initialize(name: "workflow", description: "", instructions: nil,
-      tools: [], skills: [], available_skills: [], model: nil, client: nil,
-      store: nil, prompt_mode: :task, thinking: nil, compaction: nil, on_event: nil,
-      output_schema: nil, max_iterations: nil, timeout: nil, max_spend: nil,
-      cost_limit: nil, max_depth: nil, max_tool_executions: nil, max_tool_executions_by_name: nil,
-      output_audit: nil, output_audit_mode: nil, output_policy: nil, output_policy_mode: nil, output_policy_model: nil, output_policy_thinking: nil)
+    DEFAULT_INSTRUCTIONS = ORCHESTRATOR_PREAMBLE
 
+    attr_reader :name, :options
+
+    def initialize(name: "workflow", instructions: nil, preamble: true, **options)
       @name = name.to_s
-      @description = description.to_s
-      @instructions = instructions || DEFAULT_INSTRUCTIONS
-      @tools = Array(tools)
-      @skills = Array(skills)
-      @available_skills = Array(available_skills)
-      @model = model
-      @client = client
-      @store = store
-      @prompt_mode = prompt_mode
-      @thinking = thinking
-      @compaction = compaction
-      @on_event = on_event
-      @output_schema = output_schema
-      @max_iterations = max_iterations
-      @timeout = timeout
-      @cost_limit = cost_limit || max_spend
-      @max_depth = max_depth
-      @max_tool_executions = max_tool_executions
-      @max_tool_executions_by_name = max_tool_executions_by_name
-      @output_audit = output_audit
-      @output_audit_mode = output_audit_mode
-      @output_policy = output_policy
-      @output_policy_mode = output_policy_mode
-      @output_policy_model = output_policy_model
-      @output_policy_thinking = output_policy_thinking
       raise ArgumentError, "name is required" if @name.empty?
-      @agent = build_agent
+
+      @options = options.merge(
+        name: @name,
+        prompt_mode: options.fetch(:prompt_mode, :task),
+        instructions: compose_instructions(instructions, preamble: preamble)
+      ).freeze
+      @agent = Agent.new(**@options)
     end
 
-    def run(prompt = nil, task: nil, input: nil, async: false, subject: nil, metadata: {},
-      max_spend: nil, cost_limit: nil, **options)
-
-      task = task || prompt
-      raise ArgumentError, "task is required" if task.to_s.empty?
-
-      runtime_agent = if options.empty? && cost_limit.nil? && max_spend.nil?
-        @agent
-      else
-        build_agent(cost_limit: cost_limit || max_spend, **options)
-      end
-
-      runtime_agent.run(
-        task,
-        input: input,
-        async: async,
-        subject: subject,
-        metadata: metadata
-      )
+    def run(prompt = nil, task: nil, input: nil, async: false, subject: nil, metadata: {}, **overrides)
+      agent(**overrides).run(task || prompt, input: input, async: async, subject: subject, metadata: metadata)
     end
 
-    def agent(**options)
-      options.empty? ? @agent : build_agent(**options)
-    end
-
-    def max_spend
-      cost_limit
+    def agent(**overrides)
+      overrides.empty? ? @agent : Agent.new(**@options.merge(overrides.compact))
     end
 
     private
-      def build_agent(**overrides)
-        attrs = {
-          name: name,
-          description: description,
-          instructions: instructions,
-          tools: tools,
-          skills: skills,
-          available_skills: available_skills,
-          model: model,
-          client: client,
-          store: store,
-          prompt_mode: prompt_mode,
-          thinking: thinking,
-          compaction: compaction,
-          on_event: on_event,
-          output_schema: output_schema,
-          max_iterations: max_iterations,
-          timeout: timeout,
-          cost_limit: cost_limit,
-          max_depth: max_depth,
-          max_tool_executions: max_tool_executions,
-          max_tool_executions_by_name: max_tool_executions_by_name,
-          output_audit: output_audit,
-          output_audit_mode: output_audit_mode,
-          output_policy: output_policy,
-          output_policy_mode: output_policy_mode,
-          output_policy_model: output_policy_model,
-          output_policy_thinking: output_policy_thinking
-        }
-        attrs.merge!(overrides.compact)
-        Agent.new(**attrs)
+      def compose_instructions(instructions, preamble:)
+        parts = []
+        parts << ORCHESTRATOR_PREAMBLE if preamble
+        parts << instructions.to_s.strip unless instructions.to_s.strip.empty?
+        parts.join("\n\n")
       end
   end
 end

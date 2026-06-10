@@ -81,9 +81,9 @@ examples/technical_explainer/
     instructions.md      # SpecReader's role and durable behavior rules
     system_prompt.md     # Explicit composition of TurnKit prompt sections
   skills/
-    technical_explainer.md
-    source_finder.md
-    implementation_review.md
+    technical_explainer.md     # Markdown skill with name/description frontmatter
+    source_finder.md           # Markdown skill with name/description frontmatter
+    implementation_review.md   # Markdown skill with name/description frontmatter
   lib/tools/
     parallel_web_search.rb
     parallel_web_extract.rb

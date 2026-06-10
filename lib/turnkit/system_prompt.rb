@@ -194,7 +194,7 @@ module TurnKit
 
       tagged(
         "skills_available",
-        "Load or follow a skill when the task matches its description.\n\n#{entries.join("\n")}"
+        "These skills are listed but not loaded. When a task matches a skill description, call load_skill with the skill key before relying on it.\n\n#{entries.join("\n")}"
       )
     end
 

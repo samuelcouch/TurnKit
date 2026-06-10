@@ -106,7 +106,7 @@ module TurnKit
             next
           end
 
-          validate_value!(value, param)
+          SchemaCheck.validate!(value, schema_for(param), error_class: ToolValidationError, label: name)
           normalized[name] = value
         end
         normalized
@@ -169,26 +169,7 @@ module TurnKit
         end
 
         def validate_value!(value, param)
-          return if value.nil? && !param.fetch(:required)
-
-          case param.fetch(:type)
-          when :string, :enum
-            raise ToolValidationError, "#{param.fetch(:name)} must be a string" unless value.is_a?(String)
-          when :integer
-            raise ToolValidationError, "#{param.fetch(:name)} must be an integer" unless value.is_a?(Integer)
-          when :number
-            raise ToolValidationError, "#{param.fetch(:name)} must be a number" unless value.is_a?(Numeric)
-          when :boolean
-            raise ToolValidationError, "#{param.fetch(:name)} must be a boolean" unless value == true || value == false
-          when :array
-            raise ToolValidationError, "#{param.fetch(:name)} must be an array" unless value.is_a?(Array)
-          when :object
-            raise ToolValidationError, "#{param.fetch(:name)} must be an object" unless value.is_a?(Hash)
-          end
-
-          if param[:enum] && !Array(param[:enum]).include?(value)
-            raise ToolValidationError, "#{param.fetch(:name)} must be one of: #{Array(param[:enum]).join(", ")}"
-          end
+          SchemaCheck.validate!(value, schema_for(param), error_class: ToolValidationError, label: param.fetch(:name))
         end
 
         def accepts_turnkit_context?(instance)

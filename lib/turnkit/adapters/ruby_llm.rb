@@ -182,11 +182,40 @@ module TurnKit
           )
           Result.new(
             text: response_text(response),
+            parts: response_parts(response, tool_calls: tool_calls),
             output_data: response_data(response),
             tool_calls: tool_calls,
             usage: usage,
             model: response.respond_to?(:model_id) ? response.model_id : model
           )
+        end
+
+        def response_parts(response, tool_calls:)
+          content = response.respond_to?(:content) ? response.content : response
+          parts = case content
+          when Array
+            content.map { |part| normalize_provider_part(part) }
+          when Hash
+            [ { "type" => "text", "text" => content.to_json } ]
+          else
+            text = content.to_s
+            text.empty? ? [] : [ { "type" => "text", "text" => text } ]
+          end.compact
+          parts + Array(tool_calls).map { |call| { "type" => "tool_call", "id" => call.id, "name" => call.name, "arguments" => call.arguments } }
+        end
+
+        def normalize_provider_part(part)
+          attrs = part.respond_to?(:to_h) ? part.to_h.transform_keys(&:to_s) : nil
+          return { "type" => "text", "text" => part.to_s } unless attrs
+
+          case attrs["type"].to_s
+          when "text", "output_text"
+            { "type" => "text", "text" => attrs["text"] || attrs["content"].to_s }
+          when "thinking", "reasoning"
+            { "type" => "thinking", "text" => attrs["text"] || attrs["content"].to_s, "signature" => attrs["signature"], "redacted" => attrs["redacted"] || false }.compact
+          else
+            { "type" => "provider", "kind" => attrs["type"].to_s, "data" => attrs }
+          end
         end
 
         def response_text(response)

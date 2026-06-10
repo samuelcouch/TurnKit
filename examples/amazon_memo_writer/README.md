@@ -4,10 +4,9 @@ This example stress-tests a strict workflow that must research, read sources,
 draft, edit, and then submit an Amazon-style memo through a structured terminal
 tool.
 
-It is intentionally small and deterministic around tools. The `web_search` and
-`read_web_page` tools return fixture evidence, so the benchmark measures the
-Workflow loop, tool use, output policies, budgets, and formatting reliability
-without depending on live web results.
+The `web_search` and `read_web_page` tools use Parallel Search and Extract, so
+sources come from real web research. The deterministic parts of the example are
+the submit tool, Markdown renderer, and format audit.
 
 ## What it demonstrates
 
@@ -15,6 +14,7 @@ without depending on live web results.
 - tool use before final output
 - per-tool budgets with `max_tool_executions_by_name`
 - a terminal submit tool that renders exact Markdown
+- Markdown skill files with `name` / `description` frontmatter
 - deterministic output audits for strict format rules
 - an LLM `TurnKit::OutputPolicy` for semantic review
 - benchmark reporting for time, model calls, tool calls, usage, cost, and accuracy
@@ -43,6 +43,12 @@ OpenAI:
 
 ```sh
 export OPENAI_API_KEY=...
+```
+
+Set a Parallel key for web search and page reading:
+
+```sh
+export PARALLEL_API_KEY=...
 ```
 
 Run the default benchmark:

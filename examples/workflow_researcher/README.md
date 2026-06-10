@@ -70,10 +70,8 @@ DEEP_MONITORING=1 bundle exec ruby examples/workflow_researcher/workflow_researc
 The workflow packages a single orchestrator runtime:
 
 ```ruby
-source_grounded_brief = TurnKit::Skill.new(
-  key: "source_grounded_brief",
-  name: "Source Grounded Brief",
-  content: "Research, build an evidence pack, draft, verify, revise, finalize."
+source_grounded_brief = TurnKit::Skill.from_file(
+  File.join(__dir__, "skills", "source_grounded_brief.md")
 )
 
 workflow = TurnKit::Workflow.new(

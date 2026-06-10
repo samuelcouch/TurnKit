@@ -83,6 +83,7 @@ module TurnKit
       - Keep every section.
       - Use terse bullets.
       - Preserve exact file paths, commands, error strings, IDs, and important values.
+      - In Tool Results To Remember, record which skill keys were loaded.
       - Do not invent facts.
       - Do not include secrets.
       - Do not include a greeting or preamble.

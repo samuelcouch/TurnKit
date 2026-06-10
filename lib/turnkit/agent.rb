@@ -3,14 +3,14 @@
 module TurnKit
   class Agent
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
-    attr_reader :client, :store, :max_iterations, :timeout, :cost_limit, :max_depth, :max_tool_executions, :max_tool_executions_by_name
-    attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction, :output_schema, :on_event
-    attr_reader :output_audit, :output_audit_mode, :output_policy_model
+    attr_reader :client, :store, :max_iterations, :timeout, :max_spend, :max_depth, :max_tool_executions, :max_tool_executions_by_name
+    attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction, :output_schema, :input_schema, :on_event
+    attr_reader :output_policy, :output_policy_mode, :output_policy_model, :output_retries
 
     def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], available_skills: [], sub_agents: [],
       system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
-      max_iterations: nil, timeout: nil, cost_limit: nil, max_depth: nil, max_tool_executions: nil, max_tool_executions_by_name: nil, thinking: nil, compaction: nil,
-      output_schema: nil, output_audit: nil, output_audit_mode: nil, output_policy: nil, output_policy_mode: nil, output_policy_model: nil, output_policy_thinking: nil, on_event: nil)
+      max_iterations: nil, timeout: nil, max_spend: nil, max_depth: nil, max_tool_executions: nil, max_tool_executions_by_name: nil, thinking: nil, compaction: nil,
+      output_schema: nil, input_schema: nil, output_policy: nil, output_policy_mode: nil, output_policy_model: nil, output_policy_thinking: nil, output_retries: 0, on_event: nil)
       @name = name.to_s
       @description = description.to_s
       @model = model
@@ -26,16 +26,18 @@ module TurnKit
       @store = store
       @max_iterations = max_iterations
       @timeout = timeout
-      @cost_limit = cost_limit
+      @max_spend = max_spend
       @max_depth = max_depth
       @max_tool_executions = max_tool_executions
       @max_tool_executions_by_name = max_tool_executions_by_name
       @thinking = self.class.normalize_thinking(thinking)
       @compaction = compaction
       @output_schema = output_schema
+      @input_schema = input_schema
       @output_policy_model = output_policy_model
-      @output_audit = normalize_output_policy_options(output_audit: output_audit, output_policy: output_policy, output_policy_model: output_policy_model, output_policy_thinking: output_policy_thinking)
-      @output_audit_mode = normalize_output_policy_mode(output_audit_mode: output_audit_mode, output_policy_mode: output_policy_mode)
+      @output_policy = normalize_output_policy(output_policy, model: output_policy_model, thinking: output_policy_thinking)
+      @output_policy_mode = normalize_output_policy_mode(output_policy_mode)
+      @output_retries = Integer(output_retries || 0)
       @on_event = on_event
       raise ArgumentError, "name is required" if @name.empty?
       validate_tools!
@@ -70,6 +72,7 @@ module TurnKit
     def run(prompt = nil, task: nil, input: nil, async: false, subject: nil, metadata: {}, parent_run: nil, root_turn_id: nil, prompt_mode: :task, **options)
       task = task || prompt
       raise ArgumentError, "task is required" if task.to_s.empty?
+      SchemaCheck.validate!(input, input_schema, error_class: InputError, label: "input") if input_schema
 
       conversation = self.conversation(subject: subject, metadata: metadata)
       message = conversation.say(task_message(task, input), metadata: { "source" => "application", "task" => true })
@@ -99,16 +102,8 @@ module TurnKit
       thinking
     end
 
-    def effective_output_audit
-      Array(output_audit).compact
-    end
-
-    def output_policy
-      output_audit
-    end
-
-    def output_policy_mode
-      output_audit_mode
+    def effective_output_policy
+      Array(output_policy).compact
     end
 
     def effective_client
@@ -120,7 +115,9 @@ module TurnKit
     end
 
     def effective_tools
-      tools + sub_agents.map { |agent| SubAgentTool.for(agent) }
+      configured = tools + sub_agents.map { |agent| SubAgentTool.for(agent) }
+      skills = effective_available_skills
+      skills.empty? ? configured : configured + [ LoadSkillTool.for(skills) ]
     end
 
     def effective_on_event
@@ -161,7 +158,7 @@ module TurnKit
         max_depth: max_depth || TurnKit.max_depth,
         max_tool_executions: max_tool_executions || TurnKit.max_tool_executions,
         max_tool_executions_by_name: max_tool_executions_by_name || TurnKit.max_tool_executions_by_name,
-        cost_limit: cost_limit || TurnKit.cost_limit,
+        max_spend: max_spend || TurnKit.max_spend,
         root_started_at: root_started_at
       )
     end
@@ -188,12 +185,6 @@ module TurnKit
         effective_tools.each(&:validate_definition!)
       end
 
-      def normalize_output_policy_options(output_audit:, output_policy:, output_policy_model:, output_policy_thinking:)
-        raise ArgumentError, "use output_policy: or output_audit:, not both" if output_audit && output_policy
-
-        output_policy.nil? ? output_audit : normalize_output_policy(output_policy, model: output_policy_model, thinking: output_policy_thinking)
-      end
-
       def normalize_output_policy(value, model: nil, thinking: nil)
         case value
         when nil
@@ -204,10 +195,12 @@ module TurnKit
           output_policy_from_path(value, model: model, thinking: thinking)
         when Pathname
           output_policy_from_path(value.to_s, model: model, thinking: thinking)
+        when Skill
+          OutputPolicy.from_skill(value, model: model || TurnKit.output_policy_model, thinking: thinking || TurnKit.output_policy_thinking)
         else
           return value if value.respond_to?(:call) || value.respond_to?(:check)
 
-          raise ArgumentError, "output_policy must be a policy file path, a #call/#check object, or an array of those"
+          raise ArgumentError, "output_policy must be a policy file path, a skill, a #call/#check object, or an array of those"
         end
       end
 
@@ -223,12 +216,8 @@ module TurnKit
         )
       end
 
-      def normalize_output_policy_mode(output_audit_mode:, output_policy_mode:)
-        if output_audit_mode && output_policy_mode && output_audit_mode.to_sym != output_policy_mode.to_sym
-          raise ArgumentError, "use output_policy_mode: or output_audit_mode:, not both"
-        end
-
-        value = output_policy_mode || output_audit_mode || :report
+      def normalize_output_policy_mode(value)
+        value ||= :fail
         mode = value.to_sym
         raise ArgumentError, "unknown output_policy_mode: #{value}" unless %i[report fail].include?(mode)
 

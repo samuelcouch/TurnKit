@@ -12,6 +12,12 @@ module TurnKit
     def create_turn(_attributes) = raise(NotImplementedError)
     def load_turn(_id) = raise(NotImplementedError)
     def update_turn(_id, _attributes) = raise(NotImplementedError)
+    def claim_turn(id, from: "pending", to: "running", **attributes)
+      turn = load_turn(id)
+      return nil unless turn["status"] == from
+
+      update_turn(id, attributes.merge(status: to))
+    end
     def list_turns(root_turn_id: nil, conversation_id: nil, agent_name: nil) = raise(NotImplementedError)
 
     def create_tool_execution(_attributes) = raise(NotImplementedError)

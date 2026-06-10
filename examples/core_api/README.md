@@ -32,9 +32,9 @@ ruby examples/core_api/02_agent_run.rb
 Use `TurnKit::Workflow` when a run becomes a named production capability with a
 repeatable procedure, tools, skills, limits, and observability.
 
-This example packages a renewal-risk workflow with a skill, CRM lookup tool, and
-runtime limits. The workflow calls a tool, consumes the result, and returns a
-recommendation.
+This example packages a renewal-risk workflow with a Markdown skill file
+(`skills/renewal_risk_review.md`), CRM lookup tool, and runtime limits. The
+workflow calls a tool, consumes the result, and returns a recommendation.
 
 ```sh
 ruby examples/core_api/03_workflow.rb

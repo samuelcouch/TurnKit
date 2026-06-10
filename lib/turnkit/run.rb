@@ -14,8 +14,8 @@ module TurnKit
     def output = output_text
     def output_text = turn.output_text
     def output_data = turn.output_data
-    def output_audit = turn.output_audit
-    def output_audit_clean? = output_audit.nil? || output_audit.fetch("clean", false)
+    def policy_audit = turn.policy_audit
+    def policy_clean? = policy_audit.nil? || policy_audit.fetch("clean", false)
     def usage = Usage.from_records(turn_records)
     def cost = Cost.from_records(turn_records)
     def steps = turn_records.length
@@ -27,9 +27,8 @@ module TurnKit
     end
 
     def messages
-      turn_records.flat_map do |record|
-        conversation = turn.store.load_conversation(record.fetch("conversation_id"))
-        turn.store.list_messages(conversation.fetch("id"))
+      turn_records.map { |record| record.fetch("conversation_id") }.uniq.flat_map do |conversation_id|
+        turn.store.list_messages(conversation_id).map { |attrs| Message.new(attrs) }
       end
     end
 

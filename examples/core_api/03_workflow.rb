@@ -43,11 +43,7 @@ class WorkflowClient < TurnKit::Client
   end
 end
 
-renewal_workflow = TurnKit::Skill.new(
-  key: "renewal_risk_review",
-  name: "Renewal Risk Review",
-  content: "Look up account facts, identify renewal risk, then produce a concise action recommendation."
-)
+renewal_workflow = TurnKit::Skill.from_file(File.join(__dir__, "skills", "renewal_risk_review.md"))
 
 client = WorkflowClient.new
 workflow = TurnKit::Workflow.new(

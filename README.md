@@ -331,8 +331,8 @@ end
 
 workflow = TurnKit::Workflow.new(
   name: "memo_writer",
-  output_audit: [no_em_dash, numbered_lists_only],
-  output_audit_mode: :fail
+  output_policy: [no_em_dash, numbered_lists_only],
+  output_policy_mode: :fail
 )
 ```
 
@@ -340,7 +340,7 @@ Run checks directly when you want to test a renderer or policy without calling a
 model:
 
 ```ruby
-audit = TurnKit.audit_output(
+audit = TurnKit.check_output_policy(
   "1. Recommendation\n- unordered item — fix this\n",
   constraints: [no_em_dash, numbered_lists_only]
 )
@@ -350,8 +350,8 @@ puts audit.messages
 ```
 
 Use `output_policy` when a semantic judge is worth the extra model call. The
-policy can be a `.md`, `.markdown`, or `.txt` file path, a `TurnKit::OutputPolicy`,
-or any object that responds to `#call` or `#check`.
+policy can be a `.md`, `.markdown`, or `.txt` file path, a `TurnKit::Skill`, a
+`TurnKit::OutputPolicy`, or any object that responds to `#call` or `#check`.
 
 ```ruby
 workflow = TurnKit::Workflow.new(
@@ -364,8 +364,34 @@ workflow = TurnKit::Workflow.new(
 ```
 
 `output_policy_mode: :report` records violations while allowing the run to
-complete. `:fail` marks the run failed after recording the output and audit.
-Policy model usage and cost are counted on the parent run.
+complete. `:fail` marks the run failed after recording the output and audit;
+`:fail` is the default for contract-driven workflows. Policy model usage and
+cost are counted on the parent run.
+
+Add `output_retries:` to turn policy failures into bounded revision loops instead
+of dead ends:
+
+```ruby
+voice = TurnKit::Skill.from_file("app/ai/skills/memo_voice.md")
+
+workflow = TurnKit::Workflow.new(
+  name: "memo_writer",
+  skills: [voice],
+  output_policy: [voice, no_em_dash],
+  output_retries: 2,
+  input_schema: {
+    "type" => "object",
+    "required" => ["project_id"],
+    "properties" => { "project_id" => { "type" => "string" } }
+  }
+)
+```
+
+`skills:` are always loaded into the prompt. `available_skills:` are listed in
+`<skills_available>` and exposed through the `load_skill` tool, so the model can
+load full instructions on demand. Every advertised tool call receives exactly one
+tool result, including validation errors, budget denials, and calls skipped after
+a terminal tool ends the turn.
 
 ### Prompt Preview
 
@@ -639,8 +665,7 @@ TurnKit.output_policy_model = "gpt-4.1-mini"
 TurnKit.timeout = 300
 ```
 
-`TurnKit.cost_limit` remains supported as the internal/legacy name for
-`max_spend`.
+`max_spend` is the only spend-limit name in the public API.
 
 Set options per agent:
 

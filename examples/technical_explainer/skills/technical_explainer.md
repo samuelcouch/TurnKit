@@ -1,3 +1,8 @@
+---
+name: Technical Explainer
+description: Explain technical source material as an implementation-oriented brief for software builders.
+---
+
 # Technical Explainer
 
 Use this skill when the user asks to explain a paper, RFC, technical spec,

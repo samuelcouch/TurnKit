@@ -40,9 +40,10 @@ module TurnKit
     def to_h
       case message.kind
       when "tool_call"
-        { role: :assistant, content: message.text, tool_calls: message.metadata.fetch("tool_calls", []) }
+        { role: :assistant, content: projected_content, tool_calls: tool_call_parts }
       when "tool_result"
-        { role: :tool, content: message.text, tool_call_id: message.metadata["tool_call_id"] }
+        part = message.content.find { |candidate| candidate.fetch("type") == "tool_result" }
+        { role: :tool, content: part&.fetch("text", message.text) || message.text, tool_call_id: part&.fetch("tool_call_id", nil) }
       else
         { role: message.role.to_sym, content: message.text }
       end
@@ -50,5 +51,19 @@ module TurnKit
 
     private
       attr_reader :message
+
+      def projected_content
+        parts = message.content.reject { |part| %w[tool_call provider].include?(part.fetch("type")) }
+        ordered = parts.select { |part| part.fetch("type") == "thinking" } + parts.select { |part| part.fetch("type") == "text" }
+        ordered.filter_map { |part| part.fetch("text", nil) }.join("\n")
+      end
+
+      def tool_call_parts
+        message.content.filter_map do |part|
+          next unless part.fetch("type") == "tool_call"
+
+          { "id" => part.fetch("id"), "name" => part.fetch("name"), "arguments" => part["arguments"] || {} }
+        end
+      end
   end
 end

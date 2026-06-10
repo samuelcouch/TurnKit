@@ -7,9 +7,12 @@ module TurnKit
     end
 
     def dispatch(tool_calls)
-      tool_calls.each do |tool_call|
+      tool_calls.each_with_index do |tool_call, index|
         execution = run(tool_call)
-        return execution if execution.completed? && tool_for(tool_call.name)&.ends_turn?
+        if execution.completed? && tool_for(tool_call.name)&.ends_turn?
+          skip_remaining(tool_calls.drop(index + 1), terminal: tool_call)
+          return execution
+        end
       end
       nil
     end
@@ -24,13 +27,7 @@ module TurnKit
 
       def run(tool_call)
         execution = ToolExecution.new(create_execution(tool_call))
-
-        begin
-          turn.budget.count_tool_execution!(tool_call.name)
-        rescue BudgetError => error
-          finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "budget_denied" => true })
-          raise
-        end
+        heartbeat!
 
         tool = tool_for(tool_call.name)
 
@@ -40,6 +37,13 @@ module TurnKit
 
         if tool_call.arguments_error
           return finish_error(execution, tool_call, tool_call.arguments_error)
+        end
+
+        begin
+          turn.budget.count_tool_execution!(tool_call.name)
+        rescue BudgetError => error
+          finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "budget_denied" => true })
+          raise
         end
 
         context = ToolContext.new(turn: turn, execution: execution)
@@ -63,30 +67,48 @@ module TurnKit
       end
 
       def finish_success(execution, tool_call, payload)
+        json = payload.to_json
         attrs = turn.store.update_tool_execution(execution.id, "status" => "completed", "result" => payload, "completed_at" => Clock.now)
-        append_result(execution, tool_call, payload)
-        turn.emit("tool_call.completed", id: tool_call.id, name: tool_call.name, result_chars: payload.to_json.length)
+        append_result(execution, tool_call, payload, json: json, error: false)
+        heartbeat!
+        turn.emit("tool_call.completed", id: tool_call.id, name: tool_call.name, result_chars: json.length)
         ToolExecution.new(attrs)
       end
 
       def finish_error(execution, tool_call, message, details: nil)
         error = { "message" => message.to_s, "details" => details }.compact
+        json = error.to_json
         attrs = turn.store.update_tool_execution(execution.id, "status" => "failed", "error" => error, "completed_at" => Clock.now)
-        append_result(execution, tool_call, error)
-        turn.emit("tool_call.failed", id: tool_call.id, name: tool_call.name, error: error, result_chars: error.to_json.length)
+        append_result(execution, tool_call, error, json: json, error: true)
+        heartbeat!
+        turn.emit("tool_call.failed", id: tool_call.id, name: tool_call.name, error: error, result_chars: json.length)
         ToolExecution.new(attrs)
       end
 
-      def append_result(execution, tool_call, payload)
+      def append_result(execution, tool_call, payload, json: payload.to_json, error: false)
         message = turn.conversation.append_message(
           role: "tool",
           kind: "tool_result",
-          text: payload.to_json,
+          content: [ { "type" => "tool_result", "tool_call_id" => tool_call.id, "text" => json, "error" => error } ],
           turn_id: turn.id,
           tool_execution_id: execution.id,
-          metadata: { "tool_call_id" => tool_call.id, "tool_name" => tool_call.name }
+          metadata: { "tool_name" => tool_call.name }
         )
         turn.emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
+      end
+
+      def skip_remaining(calls, terminal:)
+        calls.each do |call|
+          payload = { "skipped" => true, "message" => "not executed: turn ended by #{terminal.name}" }
+          execution = ToolExecution.new(create_execution(call))
+          attrs = turn.store.update_tool_execution(execution.id, "status" => "cancelled", "result" => payload, "completed_at" => Clock.now)
+          append_result(ToolExecution.new(attrs), call, payload)
+          turn.emit("tool_call.skipped", id: call.id, name: call.name)
+        end
+      end
+
+      def heartbeat!
+        turn.send(:heartbeat!)
       end
 
       def tool_for(name)

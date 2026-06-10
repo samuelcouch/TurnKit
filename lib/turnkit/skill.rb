@@ -1,13 +1,15 @@
 # frozen_string_literal: true
 
+require "yaml"
+
 module TurnKit
   class Skill
     attr_reader :key, :name, :description, :content
 
     def self.from_file(path, key: nil, name: nil, description: "")
-      content = File.read(path)
+      content, metadata = parse_file(File.read(path))
       base = File.basename(path, File.extname(path))
-      new(key: key || base, name: name || base.tr("_-", " ").split.map(&:capitalize).join(" "), description: description, content: content)
+      new(key: key || base, name: name || metadata["name"] || base.tr("_-", " ").split.map(&:capitalize).join(" "), description: description.to_s.empty? ? metadata["description"].to_s : description, content: content)
     end
 
     def self.from_directory(path, pattern: "*.md")
@@ -22,6 +24,18 @@ module TurnKit
       raise ArgumentError, "key is required" if @key.empty?
       raise ArgumentError, "name is required" if @name.empty?
       raise ArgumentError, "content is required" if @content.empty?
+    end
+
+    def self.parse_file(content)
+      text = content.to_s
+      return [ text, {} ] unless text.start_with?("---\n")
+
+      _, frontmatter, body = text.split(/^---\s*$/, 3)
+      return [ text, {} ] unless body
+
+      [ body.sub(/\A\n/, ""), YAML.safe_load(frontmatter, permitted_classes: [ Symbol ], aliases: false) || {} ]
+    rescue Psych::SyntaxError
+      [ text, {} ]
     end
   end
 end

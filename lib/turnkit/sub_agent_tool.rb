@@ -42,7 +42,8 @@ module TurnKit
         agent: sub_agent,
         on_event: parent_turn.agent.effective_on_event
       )
-      { "conversation_id" => conversation.id, "turn_id" => child.id, "status" => child.status, "result" => child.output_text, "output_data" => child.output_data }.compact
+      error = child.store.load_turn(child.id)["error"] if child.failed?
+      { "conversation_id" => conversation.id, "turn_id" => child.id, "status" => child.status, "result" => child.output_text, "output_data" => child.output_data, "error" => error }.compact
     end
   end
 end

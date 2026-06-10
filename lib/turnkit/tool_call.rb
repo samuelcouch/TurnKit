@@ -4,10 +4,10 @@ module TurnKit
   class ToolCall
     attr_reader :id, :name, :arguments, :arguments_error
 
-    def initialize(id:, name:, arguments: {})
+    def initialize(id:, name:, arguments: {}, arguments_error: nil)
       @id = id.to_s
       @name = name.to_s
-      @arguments_error = nil
+      @arguments_error = arguments_error
       @arguments = normalize_arguments(arguments)
     end
 
@@ -23,7 +23,7 @@ module TurnKit
           {}
         end
       rescue JSON::ParserError
-        @arguments_error = "invalid JSON arguments"
+        @arguments_error ||= "invalid JSON arguments"
         {}
       end
   end

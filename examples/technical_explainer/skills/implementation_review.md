@@ -1,3 +1,8 @@
+---
+name: Implementation Review
+description: Translate source material into implementation boundaries, risks, and tests.
+---
+
 # Implementation Review
 
 Use this skill when the user asks what a source document means for a concrete

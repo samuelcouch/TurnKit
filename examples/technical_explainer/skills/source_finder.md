@@ -1,3 +1,8 @@
+---
+name: Source Finder
+description: Find canonical sources for documents, standards, specifications, projects, and APIs.
+---
+
 # Source Finder
 
 Use this skill when the user names a document, standard, specification, project,

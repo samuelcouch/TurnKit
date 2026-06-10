@@ -56,6 +56,34 @@ class LookupClient
   end
 end
 
+class FakeAmazonMemoResearchClient
+  def search(objective:, search_queries:)
+    {
+      "objective" => objective,
+      "search_queries" => search_queries,
+      "results" => [
+        { "url" => "https://example.com/race-photo-discovery", "title" => "Race Photo Discovery Study", "excerpt" => "Bib-number search reduces manual lookup requests." },
+        { "url" => "https://example.com/event-check-in-workload", "title" => "Event Staff Workload Notes", "excerpt" => "Accurate photo matching cuts back-and-forth for event teams." }
+      ]
+    }
+  end
+
+  def read_page(url:, objective:)
+    {
+      "url" => url,
+      "objective" => objective,
+      "content" => case url
+      when "https://example.com/race-photo-discovery"
+        "Race organizers report fewer manual lookup requests when attendees can search by bib number."
+      when "https://example.com/event-check-in-workload"
+        "Clear attendee instructions and accurate photo matching reduce back-and-forth for organizers and photographers."
+      else
+        ""
+      end
+    }
+  end
+end
+
 class InjectedLookupTool < TurnKit::Tool
   tool_name "injected_lookup"
   description "Look up data with an injected client."
@@ -233,11 +261,11 @@ class TurnKitTest < Minitest::Test
     assert run.completed?
     assert_equal "finished", run.output
     assert_equal "model-b", client.calls.first.fetch(:model)
-    assert_equal 0.25, TurnKit.cost_limit
+    assert_equal 0.25, TurnKit.max_spend
     assert_equal 0.25, TurnKit.max_spend
   ensure
     TurnKit.default_model = "test-model"
-    TurnKit.cost_limit = nil
+    TurnKit.max_spend = nil
   end
 
   def test_workflow_accepts_event_callback
@@ -254,32 +282,33 @@ class TurnKitTest < Minitest::Test
 
   def test_amazon_memo_example_finalizes_with_structured_terminal_tool
     client = FakeClient.new(
-      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "search_1", name: "web_search", arguments: { objective: "research", search_queries: [ "enterprise onboarding support" ] }) ]),
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "search_1", name: "web_search", arguments: { objective: "research", search_queries: [ "race photo bib search" ] }) ]),
       TurnKit::Result.new(tool_calls: [
-        TurnKit::ToolCall.new(id: "read_1", name: "read_web_page", arguments: { url: "https://example.com/customer-support-latency", objective: "extract latency evidence" }),
-        TurnKit::ToolCall.new(id: "read_2", name: "read_web_page", arguments: { url: "https://example.com/onboarding-economics", objective: "extract onboarding evidence" })
+        TurnKit::ToolCall.new(id: "read_1", name: "read_web_page", arguments: { url: "https://example.com/race-photo-discovery", objective: "extract photo discovery evidence" }),
+        TurnKit::ToolCall.new(id: "read_2", name: "read_web_page", arguments: { url: "https://example.com/event-check-in-workload", objective: "extract organizer workload evidence" })
       ]),
       TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "submit_1", name: "submit_amazon_memo", arguments: {
-        title: "Create an Enterprise Onboarding Support Lane",
+        title: "Add Bib Number Search for Race Photo Galleries",
         author: "TurnKit Memo Bot",
         date: "2026-06-09",
-        tldr: "Launch a 60-day enterprise onboarding lane to reduce response latency, clarify ownership, and protect expansion intent.",
-        customer_problem: "Enterprise customers need fast, accountable help during implementation. Slow first responses and unclear ownership turn onboarding friction into project risk.",
-        current_evidence: "Read sources report abandonment risk after 24-hour first-response times and link first-30-day implementation delays to lower expansion intent.",
-        recommendation: "Launch a 60-day pilot for enterprise accounts with named owners, a sub-24-hour first-response target, and escalation coverage.",
+        tldr: "Launch bib-number search so race attendees can find photos faster and organizers handle fewer lookup questions.",
+        customer_problem: "Event organizers and photographers lose time when attendees cannot find their photos and ask staff for help after the event.",
+        current_evidence: "Read sources say bib-number search reduces manual lookup requests and accurate photo matching cuts back-and-forth for event teams.",
+        recommendation: "Launch a race-event pilot that lets attendees search galleries by bib number and gives organizers clear instructions to share.",
         risks_and_open_questions: [
-          "The main risk is taking capacity from the standard support queue.",
-          "The largest open question is which accounts qualify for the lane."
+          "The main risk is inaccurate photo matching for covered or missing bib numbers.",
+          "The largest open question is which race formats should join the pilot first."
         ],
         next_steps: [
-          "Assign one owner for the 60-day pilot this week.",
-          "Set the sub-24-hour response target before inviting accounts."
+          "Choose two race photographers for the pilot this week.",
+          "Draft attendee instructions that explain how to search by bib number."
         ],
-        sources: [ "https://example.com/customer-support-latency", "https://example.com/onboarding-economics" ]
+        sources: [ "https://example.com/race-photo-discovery", "https://example.com/event-check-in-workload" ]
       }) ]),
+      TurnKit::Result.new(output_data: { "approved" => true, "violations" => [] }),
       TurnKit::Result.new(output_data: { "approved" => true, "violations" => [] })
     )
-    workflow = AmazonMemoWriter.workflow(model: "test-model", client: client, semantic_audit: true)
+    workflow = AmazonMemoWriter.workflow(model: "test-model", client: client, parallel_client: FakeAmazonMemoResearchClient.new, semantic_audit: true)
 
     run = workflow.run("Write the memo")
     accuracy = AmazonMemoWriter.accuracy(run.output, run)
@@ -292,9 +321,9 @@ class TurnKitTest < Minitest::Test
     assert_includes run.output, "## TL;DR"
     assert_includes run.output, "## Recommendation"
     assert_includes run.output, "## Next Steps"
-    assert_match(/^1\. The main risk is taking capacity/, run.output)
-    assert_match(/^1\. Assign one owner/, run.output)
-    assert_match(/^1\. https:\/\/example.com\/customer-support-latency/, run.output)
+    assert_match(/^1\. The main risk is inaccurate photo matching/, run.output)
+    assert_match(/^1\. Choose two race photographers/, run.output)
+    assert_match(/^1\. https:\/\/example.com\/race-photo-discovery/, run.output)
     refute_includes run.output, "—"
     refute_match(/^\s*[-*]\s+/, run.output)
     assert_empty AmazonMemoWriter.format_policy(run.output)
@@ -313,7 +342,7 @@ class TurnKitTest < Minitest::Test
     assert_includes client.calls.first.fetch(:instructions), "executing an application task"
   end
 
-  def test_audit_output_runs_user_defined_constraints
+  def test_check_output_policy_runs_user_defined_constraints
     no_em_dash = ->(output) do
       next if output.count("—").zero?
 
@@ -326,7 +355,7 @@ class TurnKitTest < Minitest::Test
       { rule: "numbered_lists_only", message: "contains unordered list markers", metadata: { lines: lines } }
     end
 
-    result = TurnKit.audit_output(
+    result = TurnKit.check_output_policy(
       "1. Recommendation\n- unordered item — fix this\n",
       constraints: [ no_em_dash, numbered_lists_only ]
     )
@@ -337,7 +366,7 @@ class TurnKitTest < Minitest::Test
     assert_equal [ 2 ], result.violations[1].metadata.fetch(:lines)
   end
 
-  def test_audit_output_supports_structured_output_constraints
+  def test_check_output_policy_supports_structured_output_constraints
     requires_recommendation = ->(output) do
       next if output.fetch("recommendation", "").length.positive?
 
@@ -355,7 +384,7 @@ class TurnKitTest < Minitest::Test
       end
     end.new
 
-    result = TurnKit.audit_output(
+    result = TurnKit.check_output_policy(
       { "recommendation" => "Pilot", "sources" => [ "S1" ] },
       constraints: [ requires_recommendation, requires_sources ]
     )
@@ -365,8 +394,8 @@ class TurnKitTest < Minitest::Test
     assert_equal({ "clean" => false, "violations" => [ { "rule" => "source_count", "message" => "needs at least two sources", "metadata" => { count: 1 } } ] }, result.to_h)
   end
 
-  def test_audit_output_accepts_clean_output
-    result = TurnKit.audit_output(
+  def test_check_output_policy_accepts_clean_output
+    result = TurnKit.check_output_policy(
       "1. Recommendation\n   1. Pilot with guardrails.\n",
       constraints: [ ->(output) { "missing recommendation" unless output.include?("Recommendation") } ]
     )
@@ -376,7 +405,7 @@ class TurnKitTest < Minitest::Test
     assert_equal({ "clean" => true, "violations" => [] }, result.to_h)
   end
 
-  def test_agent_output_audit_report_mode_completes_and_records_violations
+  def test_agent_policy_audit_report_mode_completes_and_records_violations
     audit = ->(output, turn:) do
       assert_instance_of TurnKit::Turn, turn
       next if output.include?("Recommendation")
@@ -384,39 +413,39 @@ class TurnKitTest < Minitest::Test
       { rule: "recommendation_required", message: "missing recommendation" }
     end
     client = FakeClient.new(TurnKit::Result.new(text: "Draft only"))
-    agent = TurnKit::Agent.new(name: "writer", client: client, output_audit: audit)
+    agent = TurnKit::Agent.new(name: "writer", client: client, output_policy: audit, output_policy_mode: :report)
 
     run = agent.run("Write memo")
 
     assert run.completed?
-    refute run.output_audit_clean?
-    assert_equal "recommendation_required", run.output_audit.fetch("violations").first.fetch("rule")
+    refute run.policy_clean?
+    assert_equal "recommendation_required", run.policy_audit.fetch("violations").first.fetch("rule")
     assert_equal "Draft only", run.output_text
   end
 
-  def test_agent_output_audit_fail_mode_fails_turn_after_recording_output
+  def test_agent_policy_audit_fail_mode_fails_turn_after_recording_output
     audit = ->(_output) { { rule: "approved_output", message: "not approved" } }
     client = FakeClient.new(TurnKit::Result.new(text: "bad output"))
-    agent = TurnKit::Agent.new(name: "writer", client: client, output_audit: audit, output_audit_mode: :fail)
+    agent = TurnKit::Agent.new(name: "writer", client: client, output_policy: audit, output_policy_mode: :fail)
 
     run = agent.run("Write memo")
 
     assert run.failed?
     assert_equal "bad output", run.output_text
-    refute run.output_audit_clean?
+    refute run.policy_clean?
     assert_equal "TurnKit::OutputAudit", run.error.fetch("class")
-    assert_equal "approved_output", run.error.fetch("output_audit").fetch("violations").first.fetch("rule")
+    assert_equal "approved_output", run.error.fetch("policy_audit").fetch("violations").first.fetch("rule")
   end
 
-  def test_workflow_passes_output_audit_to_agent
+  def test_workflow_passes_policy_audit_to_agent
     audit = ->(_output) { "missing approval" }
     client = FakeClient.new(TurnKit::Result.new(text: "finished"))
-    workflow = TurnKit::Workflow.new(name: "research", client: client, output_audit: audit, output_audit_mode: :fail)
+    workflow = TurnKit::Workflow.new(name: "research", client: client, output_policy: audit, output_policy_mode: :fail)
 
     run = workflow.run("Create a brief")
 
     assert run.failed?
-    assert_equal "output_constraint", run.output_audit.fetch("violations").first.fetch("rule")
+    assert_equal "output_constraint", run.policy_audit.fetch("violations").first.fetch("rule")
   end
 
   def test_output_policy_from_file_runs_with_its_own_model
@@ -429,7 +458,7 @@ class TurnKitTest < Minitest::Test
     }))
     policy = TurnKit::OutputPolicy.from_file(file.path, model: "audit-model", client: audit_client)
 
-    result = TurnKit.audit_output("Draft", constraints: [ policy ])
+    result = TurnKit.check_output_policy("Draft", constraints: [ policy ])
 
     refute result.clean?
     assert_equal "recommendation", result.violations.first.rule
@@ -456,7 +485,7 @@ class TurnKitTest < Minitest::Test
     run = agent.run("Write memo")
 
     assert run.completed?
-    assert run.output_audit_clean?
+    assert run.policy_clean?
     assert_equal "audit-model", audit_client.calls.first.fetch(:model)
   ensure
     file&.unlink
@@ -499,24 +528,16 @@ class TurnKitTest < Minitest::Test
 
     agent = TurnKit::Agent.new(name: "writer", output_policy: [ Pathname(file.path), object_policy ])
 
-    assert_equal 2, agent.effective_output_audit.length
-    assert_instance_of TurnKit::OutputPolicy, agent.effective_output_audit.first
-    assert_same object_policy, agent.effective_output_audit.last
+    assert_equal 2, agent.effective_output_policy.length
+    assert_instance_of TurnKit::OutputPolicy, agent.effective_output_policy.first
+    assert_same object_policy, agent.effective_output_policy.last
   ensure
     file&.unlink
   end
 
-  def test_agent_output_policy_rejects_ambiguous_strings_and_conflicts
+  def test_agent_output_policy_rejects_ambiguous_strings
     assert_raises(ArgumentError) do
       TurnKit::Agent.new(name: "writer", output_policy: "use numbered lists")
-    end
-
-    assert_raises(ArgumentError) do
-      TurnKit::Agent.new(name: "writer", output_policy: ->(_output) {}, output_audit: ->(_output) {})
-    end
-
-    assert_raises(ArgumentError) do
-      TurnKit::Agent.new(name: "writer", output_policy_mode: :fail, output_audit_mode: :report)
     end
   end
 
@@ -528,7 +549,7 @@ class TurnKitTest < Minitest::Test
     run = workflow.run("Create a brief")
 
     assert run.failed?
-    assert_equal "approved_output", run.output_audit.fetch("violations").first.fetch("rule")
+    assert_equal "approved_output", run.policy_audit.fetch("violations").first.fetch("rule")
   end
 
   def test_workflow_output_policy_path_uses_workflow_client_by_default
@@ -545,7 +566,7 @@ class TurnKitTest < Minitest::Test
     run = workflow.run("Create a brief")
 
     assert run.completed?
-    assert run.output_audit_clean?
+    assert run.policy_clean?
     assert_equal 2, workflow_client.calls.length
     assert_empty TurnKit.client.calls
     assert_equal [], workflow_client.calls.last.fetch(:tools)
@@ -561,7 +582,7 @@ class TurnKitTest < Minitest::Test
     TEXT
     policy = TurnKit::OutputPolicy.new(content: "Require heading.", client: audit_client)
 
-    result = TurnKit.audit_output("Draft", constraints: [policy])
+    result = TurnKit.check_output_policy("Draft", constraints: [policy])
 
     refute result.clean?
     assert_equal "format", result.violations.first.rule
@@ -573,12 +594,12 @@ class TurnKitTest < Minitest::Test
       TurnKit::Result.new(output_data: { "approved" => false, "violations" => [ { "rule" => "policy", "message" => "missing recommendation" } ] }, usage: TurnKit::Usage.new(input_tokens: 100, output_tokens: 20, cost: 0.02))
     )
     policy = TurnKit::OutputPolicy.new(content: "Require a recommendation.")
-    workflow = TurnKit::Workflow.new(name: "research", client: client, output_policy: policy)
+    workflow = TurnKit::Workflow.new(name: "research", client: client, output_policy: policy, output_policy_mode: :report)
 
     run = workflow.run("Create a brief")
 
     assert run.completed?
-    refute run.output_audit_clean?
+    refute run.policy_clean?
     assert_equal 140, run.usage.total_tokens
     assert_in_delta 0.03, run.cost.total
     assert_equal 1, run.turn_records.length
@@ -895,10 +916,10 @@ class TurnKitTest < Minitest::Test
     assert_equal 0.252, turn.cost.total
   end
 
-  def test_cost_limit_uses_calculated_cost
+  def test_max_spend_uses_calculated_cost
     TurnKit.cost_rates = { "model-a" => { input: 1.00, output: 1.00 } }
     client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 1_000_000)))
-    agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client, cost_limit: 0.50)
+    agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client, max_spend: 0.50)
 
     turn = agent.conversation.ask("Hi")
 
@@ -1698,5 +1719,128 @@ class TurnKitTest < Minitest::Test
     adapter.send(:add_instructions, chat, instructions, model: "claude-sonnet-4-5")
 
     assert_equal instructions, chat.instructions
+  end
+
+  def test_terminal_tool_skips_sibling_calls_with_tool_results
+    client = FakeClient.new(TurnKit::Result.new(tool_calls: [
+      TurnKit::ToolCall.new(id: "save_1", name: "save_report", arguments: { title: "T", body: "B" }),
+      TurnKit::ToolCall.new(id: "status_1", name: "status_tool", arguments: { id: "st_1" })
+    ]))
+    agent = TurnKit::Agent.new(name: "writer", client: client, tools: [ SaveReport, StatusTool ])
+
+    turn = agent.conversation.ask("Save it")
+
+    assert turn.completed?
+    assert_equal [ "completed", "cancelled" ], turn.tool_executions.map(&:status)
+    projected = TurnKit::MessageProjection.for(turn.conversation.messages)
+    assistant_call_ids = projected.flat_map { |message| Array(message[:tool_calls]).map { |call| call.fetch("id") } }
+    result_ids = projected.filter_map { |message| message[:tool_call_id] if message[:role] == :tool }
+    assert_equal assistant_call_ids.sort, result_ids.sort
+  end
+
+  def test_available_skills_add_load_skill_tool_and_return_content
+    skill = TurnKit::Skill.new(key: "memo_voice", name: "Memo Voice", description: "Use memo voice.", content: "No em dashes.")
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "skill_1", name: "load_skill", arguments: { key: "memo_voice" }) ]),
+      TurnKit::Result.new(text: "done")
+    )
+    agent = TurnKit::Agent.new(name: "writer", client: client, available_skills: [ skill ])
+
+    turn = agent.conversation.ask("Write")
+
+    assert turn.completed?
+    assert_includes client.calls.first.fetch(:tools).map(&:tool_name), "load_skill"
+    assert_equal "No em dashes.", turn.tool_executions.first.result.fetch("content")
+  end
+
+  def test_output_policy_revision_loop_can_repair_dirty_output
+    policy = ->(output) { { rule: "recommendation", message: "missing recommendation" } unless output.include?("Recommendation") }
+    client = FakeClient.new(TurnKit::Result.new(text: "Draft"), TurnKit::Result.new(text: "Recommendation: pilot"))
+    agent = TurnKit::Agent.new(name: "writer", client: client, output_policy: policy, output_retries: 1)
+
+    run = agent.run("Write memo")
+
+    assert run.completed?
+    assert run.policy_clean?
+    assert_equal "Recommendation: pilot", run.output_text
+    assert_equal 2, client.calls.length
+    assert_includes run.messages.map(&:text).join("\n"), "previous output failed policy checks"
+  end
+
+  def test_message_parts_round_trip_and_project_thinking_before_tool_calls
+    agent = TurnKit::Agent.new(name: "worker", client: FakeClient.new(TurnKit::Result.new(text: "done")))
+    conversation = agent.conversation
+    message = conversation.append_message(
+      role: "assistant",
+      kind: "tool_call",
+      content: [
+        { "type" => "text", "text" => "visible" },
+        { "type" => "thinking", "text" => "hidden reasoning", "signature" => "sig" },
+        { "type" => "tool_call", "id" => "call_1", "name" => "status_tool", "arguments" => { "id" => "st_1" } }
+      ]
+    )
+
+    stored = TurnKit::Message.new(TurnKit.store.list_messages(conversation.id).last)
+    projected = TurnKit::MessageProjection.for([ stored ]).first
+
+    assert_equal message.content, stored.content
+    assert_equal "visible", stored.text
+    assert_match(/\Ahidden reasoning\nvisible\z/, projected.fetch(:content))
+    assert_equal "call_1", projected.fetch(:tool_calls).first.fetch("id")
+  end
+
+  def test_input_schema_validates_before_turn_creation
+    agent = TurnKit::Agent.new(
+      name: "writer",
+      client: FakeClient.new(TurnKit::Result.new(text: "done")),
+      input_schema: { "type" => "object", "required" => [ "project_id" ], "properties" => { "project_id" => { "type" => "string" } } }
+    )
+
+    assert_raises(TurnKit::InputError) { agent.run("Write", input: {}) }
+    assert_empty TurnKit.store.list_turns
+  end
+
+  def test_skill_from_file_reads_frontmatter_description
+    file = Tempfile.new([ "memo_voice", ".md" ])
+    file.write("---\nname: Memo Voice\ndescription: Voice rules.\n---\nNever use em dashes.\n")
+    file.close
+
+    skill = TurnKit::Skill.from_file(file.path)
+
+    assert_equal "Memo Voice", skill.name
+    assert_equal "Voice rules.", skill.description
+    assert_equal "Never use em dashes.\n", skill.content
+  ensure
+    file&.unlink
+  end
+
+  def test_store_claim_turn_is_compare_and_swap
+    agent = TurnKit::Agent.new(name: "worker", client: FakeClient.new(TurnKit::Result.new(text: "done")))
+    run = agent.run("Later", async: true)
+
+    claimed = TurnKit.store.claim_turn(run.id, started_at: Time.utc(2026, 1, 1))
+    second = TurnKit.store.claim_turn(run.id, started_at: Time.utc(2026, 1, 2))
+
+    assert_equal "running", claimed.fetch("status")
+    assert_nil second
+    assert_equal Time.utc(2026, 1, 1), TurnKit.store.load_turn(run.id).fetch("started_at")
+  end
+
+  def test_budget_resume_seeds_persisted_iterations_cost_and_tool_counts
+    agent = TurnKit::Agent.new(name: "worker", client: FakeClient.new(TurnKit::Result.new(text: "done")))
+    run = agent.run("Later", async: true)
+    TurnKit.store.update_turn(run.id, options: { "iterations" => 1 }, cost: 0.05, started_at: Time.utc(2026, 1, 1))
+    TurnKit.store.create_tool_execution("turn_id" => run.id, "tool_call_id" => "call_1", "tool_name" => "status_tool", "status" => "completed")
+
+    budget = TurnKit::Budget.resume(
+      store: TurnKit.store,
+      root_turn_id: run.root_turn_id,
+      limits: { max_iterations: 2, timeout: 60, max_depth: 3, max_tool_executions: 2, max_tool_executions_by_name: { "status_tool" => 1 }, max_spend: 0.10 }
+    )
+
+    assert_raises(TurnKit::BudgetError) { budget.count_tool_execution!("status_tool") }
+    budget.count_iteration!
+    assert_raises(TurnKit::BudgetError) { budget.count_iteration! }
+    assert_raises(TurnKit::BudgetError) { budget.add_cost!(0.06) }
   end
 end

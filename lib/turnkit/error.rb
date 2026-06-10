@@ -5,6 +5,7 @@ module TurnKit
   class BudgetError < Error; end
   class ConfigError < Error; end
   class CompactionError < Error; end
+  class InputError < Error; end
   class ModelAccessError < ConfigError; end
   class StoreError < Error; end
   class ToolError < Error; end

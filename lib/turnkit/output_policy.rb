@@ -27,6 +27,10 @@ module TurnKit
       new(name: name || File.basename(path, File.extname(path)), content: File.read(path), **options)
     end
 
+    def self.from_skill(skill, **options)
+      new(name: skill.key, content: skill.content, **options)
+    end
+
     def initialize(content:, name: "output_policy", model: nil, thinking: nil, client: nil)
       @name = name.to_s
       @content = content.to_s
@@ -77,6 +81,8 @@ module TurnKit
           {"approved":true,"violations":[]}
 
           Set approved to true only when the output satisfies the policy. For each violation, include a concise rule and message. Do not repair the output. Do not wrap the JSON in Markdown. Do not include commentary before or after the JSON.
+
+          The policy may be a skill; treat its output-facing rules as normative and ignore process steps that are not observable in the output.
 
           Policy:
           #{content}
