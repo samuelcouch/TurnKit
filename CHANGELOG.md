@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.10 - 2026-06-10
+
+- Add output audits and file-backed output policies for validating final run output.
+- Add per-tool execution limits and explicit budget errors.
+- Improve workflow event callbacks, model telemetry events, and compaction usage accounting.
+- Add an Amazon memo writer example and batched page reading in the workflow researcher example.
+
 ## 0.2.9 - 2026-06-08
 
 - Add `TurnKit::Workflow` for reusable single-orchestrator task runtimes with workflow skills, tools, guardrails, compaction, and run monitoring.

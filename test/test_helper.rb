@@ -3,6 +3,7 @@
 require "bundler/setup"
 require "minitest/autorun"
 require "minitest/pride"
+require "tempfile"
 
 require "turnkit"
 
@@ -14,6 +15,7 @@ class Minitest::Test
     TurnKit.max_iterations = 25
     TurnKit.max_depth = 3
     TurnKit.max_tool_executions = 100
+    TurnKit.max_tool_executions_by_name = {}
     TurnKit.timeout = 300
     TurnKit.cost_limit = nil
     TurnKit.cost_rates = {}
@@ -27,6 +29,8 @@ class Minitest::Test
     TurnKit.context_contributors = []
     TurnKit.system_prompt_contributors = []
     TurnKit.model_prompt_contributors = {}
+    TurnKit.output_policy_model = nil
+    TurnKit.output_policy_thinking = { effort: :low }
   end
 end
 

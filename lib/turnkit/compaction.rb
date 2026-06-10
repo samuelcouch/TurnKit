@@ -117,6 +117,8 @@ module TurnKit
       return unless force || over_threshold?(messages, policy)
 
       compact!(turn.conversation, agent: turn.agent, turn: turn, focus: focus, auto: true, overrides: policy, force: true)
+    rescue BudgetError
+      raise
     rescue StandardError => error
       TurnKit.logger&.warn("TurnKit compaction failed: #{error.class}: #{error.message}")
       nil
@@ -144,11 +146,14 @@ module TurnKit
         target_tokens: summary_budget(selected_tokens, policy),
         fallback_model: turn&.model || conversation.model || agent.effective_model,
         conversation_id: conversation.id,
-        turn_id: turn&.id
+        turn_id: turn&.id,
+        turn: turn
       )
 
       append_summary(conversation, turn: turn, summary: summary, selected: selected, policy: policy, focus: focus, auto: auto, input_tokens: selected_tokens)
     rescue CompactionError
+      raise
+    rescue BudgetError
       raise
     rescue StandardError => error
       raise CompactionError, "#{error.class}: #{error.message}"
@@ -350,18 +355,24 @@ module TurnKit
       index
     end
 
-    def generate_summary(agent:, policy:, messages:, previous_summary:, focus:, target_tokens:, fallback_model:, conversation_id:, turn_id:)
+    def generate_summary(agent:, policy:, messages:, previous_summary:, focus:, target_tokens:, fallback_model:, conversation_id:, turn_id:, turn: nil)
       client = policy["client"] || agent.effective_client
       model = policy["model"] || fallback_model
       safe_messages = messages.map { |message| sanitize_message(message, policy) }
       prompt = build_prompt(previous_summary: previous_summary, focus: focus, target_tokens: target_tokens)
-      result = client.chat(
+      attrs = {
         model: model,
         messages: MessageProjection.for(safe_messages) + [ { role: :user, content: prompt } ],
         tools: [],
         instructions: COMPACTION_SYSTEM_PROMPT,
         metadata: { compaction: true, conversation_id: conversation_id, turn_id: turn_id }
-      )
+      }
+      result = if turn
+        turn.internal_model_call(**attrs, purpose: "compaction", client: policy["client"])
+      else
+        client.validate!(model: model)
+        client.chat(**attrs)
+      end
       text = result.text.to_s.strip
       raise CompactionError, "compaction model returned an empty summary" if text.empty?
 

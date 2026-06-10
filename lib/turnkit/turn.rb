@@ -45,13 +45,13 @@ module TurnKit
         TurnKit::Compaction.maybe_compact!(self)
 
         request = model_request
-        emit("model.requested", model: request.model, tool_names: request.tool_names)
+        emit_model_requested("model.requested", request)
         result = call_client(request)
-        emit("model.completed", model: result.model || model, tool_call_count: result.tool_calls.length)
         result_cost = Cost.from_usage(result.usage, model: result.model || model)
 
-        budget.add_cost!(result_cost.total)
         add_usage!(result.usage, cost: result_cost)
+        emit_model_completed("model.completed", result, result_cost, model: model)
+        budget.add_cost!(result_cost.total)
         persist_assistant_message(result)
 
         if result.tool_calls?
@@ -62,8 +62,7 @@ module TurnKit
             break
           end
         else
-          update!(status: "completed", output_text: result.text, output_data: result.output_data, completed_at: Clock.now)
-          emit("turn.completed", status: status, output_text: result.text)
+          complete_with_output(result.text, output_data: result.output_data)
           break
         end
       end
@@ -96,6 +95,10 @@ module TurnKit
       @record["output_data"]
     end
 
+    def output_audit
+      (@record["options"] || {})["output_audit"]
+    end
+
     def usage
       Usage.from_h(@record["usage"] || {})
     end
@@ -125,6 +128,28 @@ module TurnKit
       emit_event(Event.new(type: type, turn_id: id, conversation_id: conversation.id, payload: payload))
     end
 
+    def internal_model_call(model:, messages:, instructions:, tools: [], thinking: nil, output_schema: nil, metadata: {}, purpose:, client: nil)
+      request = ModelRequest.new(
+        model: model,
+        messages: messages,
+        tools: tools,
+        instructions: instructions,
+        thinking: thinking,
+        output_schema: output_schema,
+        metadata: { purpose: purpose.to_s, turn_id: id, conversation_id: conversation.id }.merge(metadata || {})
+      )
+      model_client = client || agent.effective_client
+      model_client.validate!(model: request.model)
+
+      emit_model_requested("#{purpose}.model.requested", request)
+      result = call_client(request, client: model_client)
+      result_cost = Cost.from_usage(result.usage, model: result.model || request.model)
+      add_usage!(result.usage, cost: result_cost)
+      emit_model_completed("#{purpose}.model.completed", result, result_cost, model: request.model)
+      budget.add_cost!(result_cost.total)
+      result
+    end
+
     private
       def model_request
         prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: prompt_mode || agent.effective_prompt_mode(turn: self))
@@ -148,7 +173,7 @@ module TurnKit
         )
       end
 
-      def call_client(request)
+      def call_client(request, client: agent.effective_client)
         kwargs = {
           model: request.model,
           messages: request.messages,
@@ -159,9 +184,9 @@ module TurnKit
           metadata: request.metadata,
           on_event: ->(event) { emit_event(event) }
         }
-        accepted = chat_keyword_names(agent.effective_client)
+        accepted = chat_keyword_names(client)
         kwargs = kwargs.slice(*accepted) unless accepted.include?(:keyrest)
-        agent.effective_client.chat(**kwargs)
+        client.chat(**kwargs)
       end
 
       def chat_keyword_names(client)
@@ -174,6 +199,26 @@ module TurnKit
 
       def llm_messages
         MessageProjection.for(TurnKit::Compaction.project(conversation.messages_for_turn(self)))
+      end
+
+      def emit_model_requested(type, request)
+        emit(
+          type,
+          model: request.model,
+          tool_names: request.tool_names,
+          message_count: request.messages.length,
+          prompt: request.report
+        )
+      end
+
+      def emit_model_completed(type, result, cost, model: self.model)
+        emit(
+          type,
+          model: result.model || model,
+          tool_call_count: result.tool_calls.length,
+          usage: result.usage.to_h,
+          cost: cost.to_h
+        )
       end
 
       def thinking_from_options
@@ -219,8 +264,40 @@ module TurnKit
         message = runner.completion_message(execution)
         assistant = conversation.append_message(role: "assistant", kind: "text", text: message, turn_id: id)
         emit("message.created", message_id: assistant.id, role: assistant.role, kind: assistant.kind)
-        update!(status: "completed", output_text: message, completed_at: Clock.now)
-        emit("turn.completed", status: status, output_text: message)
+        complete_with_output(message)
+      end
+
+      def complete_with_output(text, output_data: nil)
+        audit = audit_output(text, output_data: output_data)
+        attrs = { output_text: text, output_data: output_data, completed_at: Clock.now }
+        if audit && !audit.clean? && agent.output_audit_mode == :fail
+          attrs[:status] = "failed"
+          attrs[:error] = { "class" => "TurnKit::OutputAudit", "message" => audit.messages.join("; "), "output_audit" => audit.to_h }
+        else
+          attrs[:status] = "completed"
+        end
+        update!(attrs)
+        persist_output_audit(audit) if audit
+
+        if failed?
+          emit("turn.failed", error: @record["error"])
+        else
+          emit("turn.completed", status: status, output_text: text)
+        end
+      end
+
+      def audit_output(text, output_data: nil)
+        constraints = agent.effective_output_audit
+        return nil if constraints.empty?
+
+        output = output_data.nil? ? text : output_data
+        TurnKit.audit_output(output, constraints: constraints, context: { turn: self, output_text: text, output_data: output_data })
+      end
+
+      def persist_output_audit(audit)
+        options = (@record["options"] || {}).merge("output_audit" => audit.to_h)
+        update!(options: options)
+        emit("output_audit.completed", clean: audit.clean?, violation_count: audit.violations.length)
       end
 
       def add_usage!(usage, cost: nil)

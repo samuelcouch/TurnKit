@@ -2,6 +2,7 @@
 
 module TurnKit
   class Error < StandardError; end
+  class BudgetError < Error; end
   class ConfigError < Error; end
   class CompactionError < Error; end
   class ModelAccessError < ConfigError; end

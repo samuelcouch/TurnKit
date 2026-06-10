@@ -51,3 +51,8 @@ TurnKit::Workflow = reusable job runner
 Even the conversation and workflow examples use an `Agent` internally because
 `Agent` is the primitive. The question is which shape your application should
 hold onto: a durable `Conversation`, a one-off `Run`, or a reusable `Workflow`.
+
+## More workflow examples
+
+- [`../workflow_researcher`](../workflow_researcher) shows source-grounded research with web search, batch page reads, per-tool budgets, and deep monitoring.
+- [`../amazon_memo_writer`](../amazon_memo_writer) shows strict memo generation with deterministic format validation, a structured terminal submit tool, and an LLM output policy audit.

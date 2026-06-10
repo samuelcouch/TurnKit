@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.md)
 
 Build durable Ruby and Rails agents with conversations, runs, workflows, tools,
-skills, sub-agents, and persistence.
+skills, output audits, sub-agents, and persistence.
 
 ## Installation
 
@@ -64,6 +64,11 @@ For runnable, API-key-free examples of the three core entry points, see
 - conversation: durable thread over time;
 - agent run: one bounded application task;
 - workflow: reusable task runner with skills, tools, and limits.
+
+For fuller workflow examples, see:
+
+- [`examples/workflow_researcher`](examples/workflow_researcher): source-grounded research with web tools, batch reads, per-tool limits, and deep monitoring;
+- [`examples/amazon_memo_writer`](examples/amazon_memo_writer): strict memo generation with research tools, a structured terminal submit tool, deterministic format checks, and an LLM output policy.
 
 ### Models
 
@@ -208,6 +213,10 @@ workflow = TurnKit::Workflow.new(
   max_spend: 0.25,
   max_iterations: 12,
   max_tool_executions: 25,
+  max_tool_executions_by_name: {
+    web_search: 2,
+    read_web_page: 8
+  },
   compaction: {
     context_limit: 64_000,
     threshold: 0.75
@@ -253,6 +262,10 @@ Prompt caching and compaction solve different problems:
 - budgets (`max_spend`, `max_iterations`, `max_tool_executions`) keep autonomous
   loops bounded.
 
+Use `max_tool_executions_by_name` when a workflow needs different budgets for
+different tools. For example, allow many cheap reads but only one final submit
+tool, or cap web searches while allowing a batch page reader.
+
 Reach for separate agents and `sub_agents` only when the isolation is worth the
 extra model calls, such as different models, different tool permissions,
 parallel specialist review, or separate durable child conversations.
@@ -288,6 +301,71 @@ class SaveBrief < TurnKit::Tool
   end
 end
 ```
+
+### Output audits and policies
+
+Use output audits for deterministic checks that should not depend on another
+model call: required headings, source counts, forbidden characters, JSON shape,
+or project-specific formatting rules.
+
+```ruby
+no_em_dash = ->(output) do
+  next unless output.include?("—")
+
+  { rule: "no_em_dash", message: "contains an em dash" }
+end
+
+numbered_lists_only = ->(output) do
+  lines = output.lines.each_with_index.filter_map do |line, index|
+    index + 1 if line.match?(/^\s*[-*]\s+/)
+  end
+
+  next if lines.empty?
+
+  {
+    rule: "numbered_lists_only",
+    message: "contains unordered list markers",
+    metadata: { lines: lines }
+  }
+end
+
+workflow = TurnKit::Workflow.new(
+  name: "memo_writer",
+  output_audit: [no_em_dash, numbered_lists_only],
+  output_audit_mode: :fail
+)
+```
+
+Run checks directly when you want to test a renderer or policy without calling a
+model:
+
+```ruby
+audit = TurnKit.audit_output(
+  "1. Recommendation\n- unordered item — fix this\n",
+  constraints: [no_em_dash, numbered_lists_only]
+)
+
+puts audit.clean?
+puts audit.messages
+```
+
+Use `output_policy` when a semantic judge is worth the extra model call. The
+policy can be a `.md`, `.markdown`, or `.txt` file path, a `TurnKit::OutputPolicy`,
+or any object that responds to `#call` or `#check`.
+
+```ruby
+workflow = TurnKit::Workflow.new(
+  name: "memo_writer",
+  output_policy: "app/ai/policies/amazon_memo.md",
+  output_policy_model: "gpt-4.1-mini",
+  output_policy_thinking: { effort: :low },
+  output_policy_mode: :report
+)
+```
+
+`output_policy_mode: :report` records violations while allowing the run to
+complete. `:fail` marks the run failed after recording the output and audit.
+Policy model usage and cost are counted on the parent run.
 
 ### Prompt Preview
 
@@ -326,9 +404,7 @@ class SaveReport < TurnKit::Tool
   parameter :title, :string, required: true
   parameter :body, :string, required: true
 
-  def self.ends_turn? = true
-
-  def self.completion_message(result)
+  terminal! do |result|
     "Saved #{result.fetch("report_id")}."
   end
 
@@ -544,9 +620,12 @@ TurnKit.reconcile_stale!
 | `TurnKit.max_iterations` | Limit model loop iterations. |
 | `TurnKit.max_depth` | Limit sub-agent depth. |
 | `TurnKit.max_tool_executions` | Limit tool calls per turn. |
+| `TurnKit.max_tool_executions_by_name` | Limit specific tools independently. |
 | `TurnKit.timeout` | Limit turn runtime. |
 | `TurnKit.max_spend` | Limit estimated turn cost. |
 | `TurnKit.compaction` | Configure context compaction. |
+| `TurnKit.output_policy_model` | Default model for file-backed output policies. |
+| `TurnKit.output_policy_thinking` | Default thinking config for file-backed output policies. |
 | `TurnKit.on_event` | Subscribe to lifecycle events. |
 
 Set options globally:
@@ -555,6 +634,8 @@ Set options globally:
 TurnKit.default_model = "gpt-4.1-mini"
 TurnKit.max_spend = 0.25
 TurnKit.max_iterations = 25
+TurnKit.max_tool_executions_by_name = { web_search: 2 }
+TurnKit.output_policy_model = "gpt-4.1-mini"
 TurnKit.timeout = 300
 ```
 

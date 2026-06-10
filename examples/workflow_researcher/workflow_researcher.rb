@@ -11,6 +11,7 @@ module WorkflowResearcher
   def self.web_tools(parallel_client: ParallelClient.new)
     [
       Tools::WebSearch.new(parallel_client: parallel_client),
+      Tools::ReadWebPages.new(parallel_client: parallel_client),
       Tools::ReadWebPage.new(parallel_client: parallel_client)
     ]
   end
@@ -18,9 +19,11 @@ module WorkflowResearcher
   class ParallelClient
     API_BASE = "https://api.parallel.ai"
 
-    def initialize(api_key: ENV["PARALLEL_API_KEY"], api_base: API_BASE)
+    def initialize(api_key: ENV["PARALLEL_API_KEY"], api_base: API_BASE, open_timeout: 5, read_timeout: 45)
       @api_key = api_key
       @api_base = api_base
+      @open_timeout = open_timeout
+      @read_timeout = read_timeout
     end
 
     def search(objective:, search_queries:)
@@ -31,8 +34,12 @@ module WorkflowResearcher
     end
 
     def read_page(url:, objective:)
+      read_pages(urls: [url], objective: objective)
+    end
+
+    def read_pages(urls:, objective:)
       post("/v1/extract", {
-        urls: [url],
+        urls: Array(urls),
         objective: objective
       })
     end
@@ -47,7 +54,7 @@ module WorkflowResearcher
         request["x-api-key"] = @api_key
         request.body = JSON.generate(payload)
 
-        response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
+        response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https", open_timeout: @open_timeout, read_timeout: @read_timeout) do |http|
           http.request(request)
         end
 
@@ -91,6 +98,27 @@ module WorkflowResearcher
         @parallel_client.read_page(url: url, objective: objective)
       end
     end
+
+    class ReadWebPages < TurnKit::Tool
+      MAX_URLS = 8
+
+      tool_name "read_web_pages"
+      description "Read multiple public web pages in one call and return relevant extracted content."
+      usage_hint "Prefer this over repeated read_web_page calls when reading several sources."
+      parameter :urls, :array, required: true, description: "Public URLs to read, up to 8."
+      parameter :objective, :string, required: true, description: "What to extract or focus on from the pages."
+
+      def initialize(parallel_client: ParallelClient.new)
+        @parallel_client = parallel_client
+      end
+
+      def call(urls:, objective:, context:)
+        urls = Array(urls).map(&:to_s).uniq
+        raise TurnKit::ToolError, "read_web_pages supports at most #{MAX_URLS} URLs" if urls.length > MAX_URLS
+
+        @parallel_client.read_pages(urls: urls, objective: objective)
+      end
+    end
   end
 end
 
@@ -103,6 +131,11 @@ TurnKit.configure do |config|
   }
   config.max_iterations = 20
   config.max_tool_executions = 40
+  config.max_tool_executions_by_name = {
+    "web_search" => Integer(ENV.fetch("TURNKIT_MAX_WEB_SEARCHES", "3")),
+    "read_web_page" => Integer(ENV.fetch("TURNKIT_MAX_PAGE_READS", "8")),
+    "read_web_pages" => Integer(ENV.fetch("TURNKIT_MAX_BATCH_PAGE_READS", "2"))
+  }
   config.timeout = 300
 end
 
@@ -127,7 +160,7 @@ source_grounded_brief = TurnKit::Skill.new(
 
     1. Research first. Use web_search to find canonical or high-authority
        sources. Prefer first-party sources.
-    2. Read pages before citing them. Use read_web_page for every URL you rely on.
+    2. Read pages before citing them. Prefer read_web_pages when reading multiple URLs, and use read_web_page only for one-off follow-up reads.
     3. Build an evidence pack: claim, short quote or excerpt, URL, and confidence.
     4. Draft only from the evidence pack.
     5. Verify every important claim against the evidence before final output.
@@ -146,6 +179,7 @@ workflow = TurnKit::Workflow.new(
   max_spend: Float(ENV.fetch("TURNKIT_MAX_SPEND", "0.50")),
   max_iterations: Integer(ENV.fetch("TURNKIT_MAX_ITERATIONS", "15")),
   max_tool_executions: Integer(ENV.fetch("TURNKIT_MAX_TOOL_EXECUTIONS", "30")),
+  max_tool_executions_by_name: TurnKit.max_tool_executions_by_name,
   compaction: TurnKit.compaction,
   instructions: <<~TEXT
     Create source-grounded briefs for the requested audience. Use the loaded

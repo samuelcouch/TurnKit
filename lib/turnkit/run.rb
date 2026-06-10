@@ -14,6 +14,8 @@ module TurnKit
     def output = output_text
     def output_text = turn.output_text
     def output_data = turn.output_data
+    def output_audit = turn.output_audit
+    def output_audit_clean? = output_audit.nil? || output_audit.fetch("clean", false)
     def usage = Usage.from_records(turn_records)
     def cost = Cost.from_records(turn_records)
     def steps = turn_records.length

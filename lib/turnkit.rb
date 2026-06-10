@@ -5,6 +5,7 @@ require "digest"
 require "securerandom"
 require "time"
 require "date"
+require "pathname"
 
 require_relative "turnkit/version"
 require_relative "turnkit/error"
@@ -22,6 +23,8 @@ require_relative "turnkit/message"
 require_relative "turnkit/record"
 require_relative "turnkit/result"
 require_relative "turnkit/skill"
+require_relative "turnkit/output_audit"
+require_relative "turnkit/output_policy"
 require_relative "turnkit/prompt_data"
 require_relative "turnkit/prompt_context"
 require_relative "turnkit/prompt_contribution"
@@ -48,8 +51,10 @@ module TurnKit
   class << self
     attr_accessor :default_model, :client, :store, :logger
     attr_accessor :max_iterations, :timeout, :max_depth, :max_tool_executions
+    attr_accessor :max_tool_executions_by_name
     attr_accessor :cost_limit, :prompt_cache
     attr_accessor :compaction
+    attr_accessor :output_policy_model, :output_policy_thinking
     attr_accessor :cost_rates, :cost_calculator
     attr_accessor :prompt_sections, :prompt_behavior, :available_skills
     attr_accessor :prompt_data_max_chars, :context_contributors
@@ -66,6 +71,7 @@ module TurnKit
   self.timeout = 300
   self.max_depth = 3
   self.max_tool_executions = 100
+  self.max_tool_executions_by_name = {}
   self.prompt_cache = :auto
   self.compaction = true
   self.cost_rates = {}
@@ -76,6 +82,8 @@ module TurnKit
   self.system_prompt_contributors = []
   self.model_prompt_contributors = {}
   self.on_event = nil
+  self.output_policy_model = nil
+  self.output_policy_thinking = { effort: :low }
 
   def self.configure
     yield self
@@ -101,5 +109,9 @@ module TurnKit
     store.find_stale_turns(before: before).each do |turn|
       store.update_turn(turn.fetch("id"), "status" => "stale", "completed_at" => Clock.now)
     end
+  end
+
+  def self.audit_output(output, constraints: [], context: {})
+    OutputAudit.check(output, constraints: constraints, context: context)
   end
 end

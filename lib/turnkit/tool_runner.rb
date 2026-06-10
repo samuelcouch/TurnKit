@@ -23,9 +23,16 @@ module TurnKit
       attr_reader :turn
 
       def run(tool_call)
-        turn.budget.count_tool_execution!
-        tool = tool_for(tool_call.name)
         execution = ToolExecution.new(create_execution(tool_call))
+
+        begin
+          turn.budget.count_tool_execution!(tool_call.name)
+        rescue BudgetError => error
+          finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "budget_denied" => true })
+          raise
+        end
+
+        tool = tool_for(tool_call.name)
 
         unless tool
           return finish_error(execution, tool_call, "unknown tool: #{tool_call.name}")
@@ -58,7 +65,7 @@ module TurnKit
       def finish_success(execution, tool_call, payload)
         attrs = turn.store.update_tool_execution(execution.id, "status" => "completed", "result" => payload, "completed_at" => Clock.now)
         append_result(execution, tool_call, payload)
-        turn.emit("tool_call.completed", id: tool_call.id, name: tool_call.name)
+        turn.emit("tool_call.completed", id: tool_call.id, name: tool_call.name, result_chars: payload.to_json.length)
         ToolExecution.new(attrs)
       end
 
@@ -66,7 +73,7 @@ module TurnKit
         error = { "message" => message.to_s, "details" => details }.compact
         attrs = turn.store.update_tool_execution(execution.id, "status" => "failed", "error" => error, "completed_at" => Clock.now)
         append_result(execution, tool_call, error)
-        turn.emit("tool_call.failed", id: tool_call.id, name: tool_call.name, error: error)
+        turn.emit("tool_call.failed", id: tool_call.id, name: tool_call.name, error: error, result_chars: error.to_json.length)
         ToolExecution.new(attrs)
       end
 

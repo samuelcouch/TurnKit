@@ -15,10 +15,10 @@ It demonstrates:
 - `TurnKit::Workflow`
 - workflow skills as reusable orchestration patterns
 - tool instances with constructor-injected clients
-- `prompt_mode: :task`
 - `max_spend`, `max_iterations`, and `max_tool_executions` guardrails
+- `max_tool_executions_by_name` per-tool budgets
 - compaction configuration
-- web search and web page reading tools
+- web search plus single-page and batch page-reading tools
 - deep monitoring for events, turns, tools, usage, and messages
 
 ## Setup
@@ -83,6 +83,11 @@ workflow = TurnKit::Workflow.new(
   max_spend: 0.50,
   max_iterations: 15,
   max_tool_executions: 30,
+  max_tool_executions_by_name: {
+    web_search: 3,
+    read_web_page: 8,
+    read_web_pages: 2
+  },
   compaction: { context_limit: 64_000, threshold: 0.75 }
 )
 
@@ -97,7 +102,7 @@ puts run.output
 The model stays in one conversation and uses the regular TurnKit loop:
 
 ```text
-model → web_search → result → read_web_page → result → final
+model → web_search → result → read_web_pages → result → final
 ```
 
 ## Tool dependency injection
