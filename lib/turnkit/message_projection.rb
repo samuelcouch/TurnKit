@@ -44,6 +44,8 @@ module TurnKit
       when "tool_result"
         part = message.content.find { |candidate| candidate.fetch("type") == "tool_result" }
         { role: :tool, content: part&.fetch("text", message.text) || message.text, tool_call_id: part&.fetch("tool_call_id", nil) }
+      when "image"
+        { role: :assistant, content: projected_images }
       else
         { role: message.role.to_sym, content: message.text }
       end
@@ -64,6 +66,15 @@ module TurnKit
 
           { "id" => part.fetch("id"), "name" => part.fetch("name"), "arguments" => part["arguments"] || {} }
         end
+      end
+
+      def projected_images
+        message.content.filter_map do |part|
+          next unless part.fetch("type") == "image"
+
+          attrs = part.slice("url", "mime_type", "model", "provider", "revised_prompt").compact
+          "Generated image: #{attrs.to_json}"
+        end.join("\n")
       end
   end
 end

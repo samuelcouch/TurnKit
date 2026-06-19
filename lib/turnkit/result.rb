@@ -28,6 +28,18 @@ module TurnKit
       tool_calls.any?
     end
 
+    def images
+      parts.filter_map do |part|
+        next unless part["type"] == "image"
+
+        ImageResult.from_h(part)
+      end
+    end
+
+    def image?
+      images.any?
+    end
+
     private
       def synthesize_parts(text:, tool_calls:)
         parts = []

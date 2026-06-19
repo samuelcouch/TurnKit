@@ -31,6 +31,15 @@ module TurnKit
       new(name: skill.key, content: skill.content, **options)
     end
 
+    def self.require_image
+      lambda do |output, output_data: nil, turn: nil, **|
+        data = output_data.is_a?(Hash) ? output_data : output
+        images = data.is_a?(Hash) ? data["images"] || data[:images] : nil
+        has_image = Array(images).any? || turn&.conversation&.messages_for_turn(turn)&.any?(&:image?)
+        { rule: "image_required", message: "output must include an image result" } unless has_image
+      end
+    end
+
     def initialize(content:, name: "output_policy", model: nil, thinking: nil, client: nil)
       @name = name.to_s
       @content = content.to_s

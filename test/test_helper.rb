@@ -46,4 +46,9 @@ class FakeClient < TurnKit::Client
     @calls << { model: model, messages: messages, tools: tools, instructions: instructions, thinking: thinking, output_schema: output_schema, metadata: metadata, on_event: on_event }
     @results.shift || TurnKit::Result.new(text: "done", model: model)
   end
+
+  def paint(prompt:, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: nil, on_event: nil)
+    @calls << { prompt: prompt, model: model, provider: provider, size: size, assume_model_exists: assume_model_exists, input_images: input_images, mask: mask, params: params, metadata: metadata, on_event: on_event }
+    @results.shift || TurnKit::Result.new(parts: [ TurnKit::ImageResult.new(model: model, provider: provider&.to_s, metadata: metadata || {}).to_h.merge("type" => "image") ], model: model)
+  end
 end

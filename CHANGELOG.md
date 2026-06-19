@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 - 2026-06-19
+
+- Add first-class image generation with `Turn#paint`, `TurnKit.paint`, and `TurnKit::ImageTool`.
+- Persist generated images as durable image messages with normalized metadata, usage, cost, and event callbacks.
+- Add image output policy support and a `generate-image` CLI smoke example for Gemini 16:9 image generation.
+
 ## 0.3.0 - 2026-06-10
 
 - Make the task-runtime API skills-first and intentionally breaking: `max_spend` is the only spend-limit name and output validation is exposed as `output_policy` / `policy_audit`.

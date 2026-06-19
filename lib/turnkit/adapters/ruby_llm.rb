@@ -41,6 +41,23 @@ module TurnKit
         normalize_response(response, model: model)
       end
 
+      def paint(prompt:, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: nil, on_event: nil)
+        require "ruby_llm"
+
+        configure_from_environment
+        kwargs = paint_kwargs(
+          model: model,
+          provider: provider,
+          assume_model_exists: assume_model_exists || false,
+          size: size || "1024x1024",
+          with: input_images,
+          mask: mask,
+          params: params || {}
+        )
+        image = ::RubyLLM.paint(prompt, **kwargs)
+        normalize_image_response(image, model: model, provider: provider, params: { "size" => size || "1024x1024" }.merge(params || {}), metadata: metadata)
+      end
+
       private
         def configure_from_environment
           config = ::RubyLLM.config
@@ -245,6 +262,47 @@ module TurnKit
           return unless response.respond_to?(:cost)
 
           response.cost&.total
+        end
+
+        def paint_kwargs(kwargs)
+          parameters = ::RubyLLM::Image.method(:paint).parameters
+          return kwargs if parameters.any? { |kind, _| kind == :keyrest }
+
+          accepted = parameters.filter_map { |kind, name| name if %i[key keyreq].include?(kind) }
+          unsupported = kwargs.keys.select { |key| !accepted.include?(key) && !blank?(kwargs[key]) }
+          raise ArgumentError, "RubyLLM image generation does not support: #{unsupported.join(", ")}" if unsupported.any?
+
+          kwargs.slice(*accepted)
+        end
+
+        def blank?(value)
+          value.nil? || value == false || (value.respond_to?(:empty?) && value.empty?)
+        end
+
+        def normalize_image_response(image, model:, provider:, params:, metadata:)
+          usage = Usage.new(
+            input_tokens: image_usage_value(image, "input_tokens"),
+            output_tokens: image_usage_value(image, "output_tokens"),
+            cost: response_cost(image)
+          )
+          part = ImageResult.new(
+            url: image.respond_to?(:url) ? image.url : nil,
+            data: image.respond_to?(:data) ? image.data : nil,
+            mime_type: image.respond_to?(:mime_type) ? image.mime_type : nil,
+            revised_prompt: image.respond_to?(:revised_prompt) ? image.revised_prompt : nil,
+            model: image.respond_to?(:model_id) ? image.model_id : model,
+            provider: provider&.to_s,
+            usage: usage,
+            params: params,
+            metadata: metadata || {}
+          ).to_h.merge("type" => "image")
+
+          Result.new(parts: [ part ], usage: usage, model: part["model"], output_data: { "type" => "image", "images" => [ part ] })
+        end
+
+        def image_usage_value(image, key)
+          usage = image.respond_to?(:usage) ? image.usage || {} : {}
+          (usage[key] || usage[key.to_sym]).to_i
         end
     end
   end

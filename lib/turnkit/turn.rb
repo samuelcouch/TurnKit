@@ -167,6 +167,59 @@ module TurnKit
       result
     end
 
+    def paint(prompt, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: {}, client: nil)
+      claimed_standalone = false
+      case status
+      when "pending"
+        claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
+        raise Error, "turn is already running" unless claimed
+
+        @record = claimed
+        @started_at = @record["started_at"]
+        @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: budget_limits)
+        claimed_standalone = true
+        emit("turn.started", status: status, model: model)
+      when "running"
+        # Image tools call this while their parent turn is running.
+      else
+        raise Error, "cannot paint for #{status} turn"
+      end
+
+      image_client = client || agent.effective_client
+      request = {
+        prompt: prompt,
+        model: model,
+        provider: provider,
+        size: size,
+        assume_model_exists: assume_model_exists,
+        input_images: input_images,
+        mask: mask,
+        params: params || {},
+        metadata: { turn_id: id, conversation_id: conversation.id }.merge(metadata || {})
+      }
+
+      image_client.validate!(model: model)
+      emit("image.requested", request.except(:input_images, :mask))
+      result = call_image_client(image_client, request)
+      result_cost = Cost.from_usage(result.usage, model: result.model || model)
+      add_usage!(result.usage, cost: result_cost)
+      budget.add_cost!(result_cost.total)
+      image = result.images.first
+      raise Error, "image client returned no image" unless image
+      raise Error, "image client returned image without url or data" if image.url.to_s.empty? && image.data.to_s.empty?
+
+      persist_image_message(image)
+      emit("image.completed", image: image.to_h, model: image.model || model, provider: image.provider || provider&.to_s, mime_type: image.mime_type, usage: result.usage.to_h, cost: result_cost.to_h, metadata: metadata || {})
+      complete_with_output(image.url.to_s, output_data: { "type" => "image", "images" => [ image.to_h ] }, audit: check_policy(image.url.to_s, output_data: { "type" => "image", "images" => [ image.to_h ] })) if claimed_standalone
+      image
+    rescue StandardError => error
+      if claimed_standalone
+        update!(status: "failed", error: { "class" => error.class.name, "message" => error.message }, completed_at: Clock.now)
+        emit("turn.failed", error: { "class" => error.class.name, "message" => error.message })
+      end
+      raise
+    end
+
     private
       def model_request
         prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: prompt_mode || agent.effective_prompt_mode(turn: self))
@@ -212,6 +265,16 @@ module TurnKit
 
           name if %i[key keyreq].include?(kind)
         end
+      end
+
+      def call_image_client(client, request)
+        kwargs = request.merge(on_event: ->(event) { emit_event(event) })
+        accepted = client.method(:paint).parameters.filter_map do |kind, name|
+          return client.paint(**kwargs) if kind == :keyrest
+
+          name if %i[key keyreq].include?(kind)
+        end
+        client.paint(**kwargs.slice(*accepted))
       end
 
       def llm_messages
@@ -271,10 +334,18 @@ module TurnKit
           )
           emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
           result.tool_calls.each { |call| emit("tool_call.created", id: call.id, name: call.name) }
+        elsif result.image?
+          message = conversation.append_message(role: "assistant", kind: "image", content: result.images.map { |image| image.to_h.merge("type" => "image") }, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
+          emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
         else
           message = conversation.append_message(role: "assistant", kind: "text", text: result.text, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
           emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
         end
+      end
+
+      def persist_image_message(image)
+        message = conversation.append_message(role: "assistant", kind: "image", content: [ image.to_h.merge("type" => "image") ], turn_id: id, metadata: { "output_data" => { "type" => "image", "images" => [ image.to_h ] } })
+        emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
       end
 
       def append_terminal_completion(runner, execution)

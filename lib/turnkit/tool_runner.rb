@@ -49,6 +49,9 @@ module TurnKit
         context = ToolContext.new(turn: turn, execution: execution)
         payload = begin
           normalize_payload(call_tool(tool, tool_call.arguments, context: context))
+        rescue BudgetError => error
+          finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "budget_denied" => true })
+          raise
         rescue StandardError => error
           return finish_error(execution, tool_call, error.message, details: { "class" => error.class.name })
         end

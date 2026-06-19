@@ -108,6 +108,23 @@ class StatusTool < TurnKit::Tool
   end
 end
 
+class HeaderImageTool < TurnKit::ImageTool
+  tool_name "header_image"
+  parameter :title, :string, required: true
+  model "image-model"
+  provider :gemini
+  size "1024x576"
+  terminal! { |result| result.fetch("url") || "image generated" }
+
+  def prompt(title:)
+    "Create a header image for #{title}"
+  end
+
+  def metadata(title:)
+    { title: title }
+  end
+end
+
 class HintTool < TurnKit::Tool
   tool_name "hint_tool"
   description "Use <carefully>."
@@ -1585,6 +1602,65 @@ class TurnKitTest < Minitest::Test
     assert_includes error.message, "TurnKit tools are not supported"
   end
 
+  def test_image_result_decodes_blob_and_round_trips_through_result
+    image = TurnKit::ImageResult.new(data: Base64.strict_encode64("png-bytes"), mime_type: "image/png", model: "image-model", provider: "gemini")
+    result = TurnKit::Result.new(parts: [ image.to_h.merge("type" => "image") ], usage: TurnKit::Usage.new(cost: 0.01), model: "image-model")
+
+    assert result.image?
+    assert_equal "png-bytes", result.images.first.to_blob
+    assert_equal "image/png", result.images.first.mime_type
+    assert_equal "gemini", result.images.first.provider
+  end
+
+  def test_ruby_llm_adapter_paint_wraps_ruby_llm_and_normalizes_image
+    verbose = nil
+    original = nil
+    require "ruby_llm"
+
+    original = RubyLLM.method(:paint)
+    calls = []
+    fake_image = Struct.new(:url, :data, :mime_type, :revised_prompt, :model_id, :usage, :cost, keyword_init: true).new(
+      data: Base64.strict_encode64("image"),
+      mime_type: "image/png",
+      revised_prompt: "revised",
+      model_id: "resolved-image-model",
+      usage: { "input_tokens" => 4 },
+      cost: Struct.new(:total).new(0.02)
+    )
+    verbose = $VERBOSE
+    $VERBOSE = nil
+    RubyLLM.define_singleton_method(:paint) do |prompt, **kwargs|
+      calls << kwargs.merge(prompt: prompt)
+      fake_image
+    end
+    $VERBOSE = verbose
+
+    result = TurnKit::Adapters::RubyLLM.new.paint(
+      prompt: "paint it",
+      model: "image-model",
+      provider: :gemini,
+      size: "1024x576",
+      assume_model_exists: true,
+      metadata: { article_id: 1 }
+    )
+
+    assert_equal "paint it", calls.first.fetch(:prompt)
+    assert_equal "image-model", calls.first.fetch(:model)
+    assert_equal :gemini, calls.first.fetch(:provider)
+    assert_equal "1024x576", calls.first.fetch(:size)
+    assert result.image?
+    assert_equal "image", result.images.first.to_blob
+    assert_equal "resolved-image-model", result.images.first.model
+    assert_equal 4, result.usage.input_tokens
+    assert_equal 0.02, result.usage.cost
+  ensure
+    if defined?(RubyLLM) && original
+      $VERBOSE = nil
+      RubyLLM.define_singleton_method(:paint, original)
+    end
+    $VERBOSE = verbose unless verbose.nil?
+  end
+
   def test_ruby_llm_adapter_configures_provider_keys_from_environment
     require "ruby_llm"
 
@@ -1787,6 +1863,100 @@ class TurnKitTest < Minitest::Test
     assert_equal "visible", stored.text
     assert_match(/\Ahidden reasoning\nvisible\z/, projected.fetch(:content))
     assert_equal "call_1", projected.fetch(:tool_calls).first.fetch("id")
+  end
+
+  def test_turn_paint_persists_image_usage_cost_and_events
+    image = TurnKit::ImageResult.new(url: "https://example.com/image.png", mime_type: "image/png", model: "image-model", provider: "gemini", usage: TurnKit::Usage.new(input_tokens: 3, cost: 0.04))
+    client = FakeClient.new(TurnKit::Result.new(parts: [ image.to_h.merge("type" => "image") ], usage: image.usage, model: "image-model"))
+    events = []
+    agent = TurnKit::Agent.new(name: "artist", client: client, on_event: ->(event) { events << event })
+    turn = agent.run("Generate later", async: true).turn
+
+    generated = turn.paint("paint", model: "image-model", provider: :gemini, size: "1024x576", metadata: { article_id: 1 })
+
+    assert_equal "https://example.com/image.png", generated.url
+    assert_equal 3, turn.reload.usage.input_tokens
+    assert_equal 0.04, turn.cost.total
+    assert turn.completed?
+    assert_equal "https://example.com/image.png", turn.output_text
+    assert_equal "image", turn.output_data.fetch("type")
+    assert TurnKit::Message.new(TurnKit.store.list_messages(turn.conversation.id).last).image?
+    assert_includes events.map(&:type), "turn.started"
+    assert_includes events.map(&:type), "image.requested"
+    assert_includes events.map(&:type), "image.completed"
+    assert_includes events.map(&:type), "turn.completed"
+    assert_equal({ article_id: 1 }, client.calls.first.fetch(:metadata).slice(:article_id))
+  end
+
+  def test_image_tool_generates_image_inside_workflow_and_satisfies_image_policy
+    image = TurnKit::ImageResult.new(url: "https://example.com/header.png", mime_type: "image/png", model: "image-model", provider: "gemini")
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "image_1", name: "header_image", arguments: { title: "Launch" }) ]),
+      TurnKit::Result.new(parts: [ image.to_h.merge("type" => "image") ], model: "image-model")
+    )
+    agent = TurnKit::Agent.new(name: "publisher", client: client, tools: [ HeaderImageTool ], output_policy: TurnKit::OutputPolicy.require_image)
+
+    run = agent.run("Generate header")
+
+    assert run.completed?
+    assert run.policy_clean?
+    assert_equal "https://example.com/header.png", run.output_text
+    assert_equal "Create a header image for Launch", client.calls.last.fetch(:prompt)
+    assert_equal "1024x576", client.calls.last.fetch(:size)
+    assert_equal :gemini, client.calls.last.fetch(:provider)
+    assert run.messages.any?(&:image?)
+  end
+
+  def test_image_tool_budget_errors_fail_the_turn
+    image = TurnKit::ImageResult.new(url: "https://example.com/header.png", model: "image-model", usage: TurnKit::Usage.new(cost: 0.02))
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "image_1", name: "header_image", arguments: { title: "Launch" }) ]),
+      TurnKit::Result.new(parts: [ image.to_h.merge("type" => "image") ], usage: image.usage, model: "image-model")
+    )
+    agent = TurnKit::Agent.new(name: "publisher", client: client, tools: [ HeaderImageTool ], max_spend: 0.01)
+
+    run = agent.run("Generate header")
+
+    assert run.failed?
+    assert_equal "cost limit reached", run.error.fetch("message")
+  end
+
+  def test_turn_paint_rejects_image_without_url_or_data
+    image = TurnKit::ImageResult.new(model: "image-model")
+    client = FakeClient.new(TurnKit::Result.new(parts: [ image.to_h.merge("type" => "image") ], model: "image-model"))
+    agent = TurnKit::Agent.new(name: "artist", client: client)
+    turn = agent.run("Generate later", async: true).turn
+
+    error = assert_raises(TurnKit::Error) { turn.paint("paint", model: "image-model") }
+
+    assert_equal "image client returned image without url or data", error.message
+    assert turn.reload.failed?
+  end
+
+  def test_turn_paint_rejects_completed_turns
+    agent = TurnKit::Agent.new(name: "artist", client: FakeClient.new(TurnKit::Result.new(text: "done")))
+    turn = agent.run("Finish").turn
+
+    error = assert_raises(TurnKit::Error) { turn.paint("paint", model: "image-model") }
+
+    assert_equal "cannot paint for completed turn", error.message
+  end
+
+  def test_image_messages_project_without_binary_data
+    agent = TurnKit::Agent.new(name: "worker", client: FakeClient.new(TurnKit::Result.new(text: "done")))
+    conversation = agent.conversation
+    message = conversation.append_message(
+      role: "assistant",
+      kind: "image",
+      content: [ { "type" => "image", "data" => Base64.strict_encode64("bytes"), "url" => "https://example.com/image.png", "mime_type" => "image/png", "model" => "image-model", "provider" => "gemini" } ]
+    )
+
+    projected = TurnKit::MessageProjection.for([ message ]).first
+
+    assert_equal :assistant, projected.fetch(:role)
+    assert_includes projected.fetch(:content), "Generated image"
+    assert_includes projected.fetch(:content), "https://example.com/image.png"
+    refute_includes projected.fetch(:content), Base64.strict_encode64("bytes")
   end
 
   def test_input_schema_validates_before_turn_creation
