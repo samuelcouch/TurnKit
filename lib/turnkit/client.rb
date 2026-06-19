@@ -13,5 +13,9 @@ module TurnKit
     def paint(prompt:, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: nil, on_event: nil)
       raise NotImplementedError
     end
+
+    def view_media(media:, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: nil, on_event: nil)
+      raise NotImplementedError
+    end
   end
 end

@@ -514,6 +514,66 @@ end
 
 Require an image before completion with `TurnKit::OutputPolicy.require_image`.
 
+### Media analysis
+
+Analyze existing images, PDFs, audio, or video inside a durable turn with
+`turn.view_media`. Media inputs can be local paths, URLs, IO-like objects,
+`TurnKit::MediaInput.bytes(...)`, or Rails Active Storage blobs/attachments.
+TurnKit records usage and cost on the turn, persists a media analysis message,
+and emits `media.requested` / `media.completed` / `media.failed` events.
+
+```ruby
+analysis = turn.view_media(
+  article.header_image,
+  objective: "Verify this generated header matches the article art direction.",
+  model: "gemini-2.5-pro",
+  provider: :gemini,
+  metadata: { article_id: article.id }
+)
+
+analysis.text          # text analysis
+analysis.data          # structured output when requested
+analysis.media         # normalized media metadata
+```
+
+For bytes, provide a MIME type so adapters can pass the media correctly:
+
+```ruby
+media = TurnKit::MediaInput.bytes(
+  File.binread("header.png"),
+  mime_type: "image/png",
+  filename: "header.png"
+)
+```
+
+For reusable workflow steps, subclass `TurnKit::ViewMediaTool`:
+
+```ruby
+class ReviewHeaderImage < TurnKit::ViewMediaTool
+  description "Review a generated article header image."
+  parameter :article_id, :integer, required: true
+
+  model "gemini-2.5-pro"
+  provider :gemini
+
+  def media(article_id:)
+    Article.find(article_id).header_image
+  end
+
+  def objective(article_id:)
+    "Review this generated image against the article art direction."
+  end
+
+  def metadata(article_id:)
+    { article_id: article_id }
+  end
+end
+```
+
+Require a media review before completion with
+`TurnKit::OutputPolicy.require_media_analysis`. TurnKit persists media metadata
+and analysis text, not raw media bytes.
+
 ### Structured Output
 
 Define a schema:

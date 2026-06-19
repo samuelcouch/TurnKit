@@ -46,6 +46,8 @@ module TurnKit
         { role: :tool, content: part&.fetch("text", message.text) || message.text, tool_call_id: part&.fetch("tool_call_id", nil) }
       when "image"
         { role: :assistant, content: projected_images }
+      when "media_analysis"
+        { role: :assistant, content: projected_media_analyses }
       else
         { role: message.role.to_sym, content: message.text }
       end
@@ -74,6 +76,15 @@ module TurnKit
 
           attrs = part.slice("url", "mime_type", "model", "provider", "revised_prompt").compact
           "Generated image: #{attrs.to_json}"
+        end.join("\n")
+      end
+
+      def projected_media_analyses
+        message.content.filter_map do |part|
+          next unless part.fetch("type") == "media_analysis"
+
+          media = part.fetch("media", {}).slice("kind", "mime_type", "filename", "url").compact
+          [ "Media analysis: #{media.to_json}", part["text"].to_s ].reject(&:empty?).join("\n")
         end.join("\n")
       end
   end

@@ -40,6 +40,15 @@ module TurnKit
       end
     end
 
+    def self.require_media_analysis
+      lambda do |output, output_data: nil, turn: nil, **|
+        data = output_data.is_a?(Hash) ? output_data : output
+        analyses = data.is_a?(Hash) ? data["media_analyses"] || data[:media_analyses] : nil
+        has_analysis = Array(analyses).any? || turn&.conversation&.messages_for_turn(turn)&.any?(&:media_analysis?)
+        { rule: "media_analysis_required", message: "output must include a media analysis result" } unless has_analysis
+      end
+    end
+
     def initialize(content:, name: "output_policy", model: nil, thinking: nil, client: nil)
       @name = name.to_s
       @content = content.to_s

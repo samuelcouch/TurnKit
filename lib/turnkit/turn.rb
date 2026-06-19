@@ -220,6 +220,59 @@ module TurnKit
       raise
     end
 
+    def view_media(media, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: {}, client: nil)
+      claimed_standalone = false
+      case status
+      when "pending"
+        claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
+        raise Error, "turn is already running" unless claimed
+
+        @record = claimed
+        @started_at = @record["started_at"]
+        @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: budget_limits)
+        claimed_standalone = true
+        emit("turn.started", status: status, model: model)
+      when "running"
+        # Media tools call this while their parent turn is running.
+      else
+        raise Error, "cannot view media for #{status} turn"
+      end
+
+      media_input = MediaInput.wrap(media)
+      media_client = client || agent.effective_client
+      request = {
+        media: media_input,
+        objective: objective,
+        model: model,
+        provider: provider,
+        output_schema: output_schema,
+        params: params || {},
+        metadata: { turn_id: id, conversation_id: conversation.id }.merge(metadata || {})
+      }
+
+      media_client.validate!(model: model)
+      emit("media.requested", request.except(:media).merge(media: media_input.to_h))
+      result = call_media_client(media_client, request)
+      result_cost = Cost.from_usage(result.usage, model: result.model || model)
+      add_usage!(result.usage, cost: result_cost)
+      budget.add_cost!(result_cost.total)
+      analysis = result.media_analyses.first
+      raise Error, "media client returned no media analysis" unless analysis
+
+      persist_media_analysis_message(analysis)
+      output_data = { "type" => "media_analysis", "media_analyses" => [ analysis.to_h ] }
+      emit("media.completed", analysis: analysis.to_h, model: analysis.model || model, provider: analysis.provider || provider&.to_s, media: media_input.to_h, usage: result.usage.to_h, cost: result_cost.to_h, metadata: metadata || {})
+      complete_with_output(analysis.text, output_data: output_data, audit: check_policy(analysis.text, output_data: output_data)) if claimed_standalone
+      analysis
+    rescue StandardError => error
+      emit("media.failed", error: { "class" => error.class.name, "message" => error.message }, metadata: metadata || {}) if status == "running" || claimed_standalone
+      if claimed_standalone
+        update!(status: "failed", error: { "class" => error.class.name, "message" => error.message }, completed_at: Clock.now)
+        emit("turn.failed", error: { "class" => error.class.name, "message" => error.message })
+      end
+      raise
+    end
+
     private
       def model_request
         prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: prompt_mode || agent.effective_prompt_mode(turn: self))
@@ -275,6 +328,16 @@ module TurnKit
           name if %i[key keyreq].include?(kind)
         end
         client.paint(**kwargs.slice(*accepted))
+      end
+
+      def call_media_client(client, request)
+        kwargs = request.merge(on_event: ->(event) { emit_event(event) })
+        accepted = client.method(:view_media).parameters.filter_map do |kind, name|
+          return client.view_media(**kwargs) if kind == :keyrest
+
+          name if %i[key keyreq].include?(kind)
+        end
+        client.view_media(**kwargs.slice(*accepted))
       end
 
       def llm_messages
@@ -337,6 +400,9 @@ module TurnKit
         elsif result.image?
           message = conversation.append_message(role: "assistant", kind: "image", content: result.images.map { |image| image.to_h.merge("type" => "image") }, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
           emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
+        elsif result.media_analysis?
+          message = conversation.append_message(role: "assistant", kind: "media_analysis", content: result.media_analyses.map { |analysis| analysis.to_h.merge("type" => "media_analysis") }, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
+          emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
         else
           message = conversation.append_message(role: "assistant", kind: "text", text: result.text, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
           emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
@@ -345,6 +411,11 @@ module TurnKit
 
       def persist_image_message(image)
         message = conversation.append_message(role: "assistant", kind: "image", content: [ image.to_h.merge("type" => "image") ], turn_id: id, metadata: { "output_data" => { "type" => "image", "images" => [ image.to_h ] } })
+        emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
+      end
+
+      def persist_media_analysis_message(analysis)
+        message = conversation.append_message(role: "assistant", kind: "media_analysis", content: [ analysis.to_h.merge("type" => "media_analysis") ], turn_id: id, metadata: { "output_data" => { "type" => "media_analysis", "media_analyses" => [ analysis.to_h ] } })
         emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
       end
 

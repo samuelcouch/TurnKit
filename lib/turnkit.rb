@@ -23,6 +23,8 @@ require_relative "turnkit/conversation"
 require_relative "turnkit/message"
 require_relative "turnkit/record"
 require_relative "turnkit/image_result"
+require_relative "turnkit/media_input"
+require_relative "turnkit/media_analysis_result"
 require_relative "turnkit/result"
 require_relative "turnkit/skill"
 require_relative "turnkit/output_audit"
@@ -36,6 +38,7 @@ require_relative "turnkit/memory_store"
 require_relative "turnkit/compaction"
 require_relative "turnkit/tool"
 require_relative "turnkit/image_tool"
+require_relative "turnkit/view_media_tool"
 require_relative "turnkit/tool_call"
 require_relative "turnkit/tool_execution"
 require_relative "turnkit/sub_agent_tool"
@@ -115,5 +118,10 @@ module TurnKit
   def self.paint(prompt, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: {}, client: nil)
     image_client = client || self.client
     image_client.paint(prompt: prompt, model: model, provider: provider, size: size, assume_model_exists: assume_model_exists, input_images: input_images, mask: mask, params: params, metadata: metadata).images.first
+  end
+
+  def self.view_media(media, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: {}, client: nil)
+    media_client = client || self.client
+    media_client.view_media(media: media, objective: objective, model: model, provider: provider, output_schema: output_schema, params: params, metadata: metadata).media_analyses.first
   end
 end

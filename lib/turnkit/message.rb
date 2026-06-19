@@ -3,7 +3,7 @@
 module TurnKit
   class Message
     ROLES = %w[user assistant tool].freeze
-    KINDS = %w[text tool_call tool_result context_summary image].freeze
+    KINDS = %w[text tool_call tool_result context_summary image media_analysis].freeze
 
     attr_reader :id, :conversation_id, :turn_id, :role, :kind, :sequence
     attr_reader :content, :tool_execution_id, :provider_message_id, :metadata, :created_at
@@ -59,6 +59,10 @@ module TurnKit
 
     def image?
       kind == "image"
+    end
+
+    def media_analysis?
+      kind == "media_analysis"
     end
 
     def text

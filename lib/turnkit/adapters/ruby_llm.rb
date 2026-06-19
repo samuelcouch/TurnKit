@@ -58,6 +58,23 @@ module TurnKit
         normalize_image_response(image, model: model, provider: provider, params: { "size" => size || "1024x1024" }.merge(params || {}), metadata: metadata)
       end
 
+      def view_media(media:, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: nil, on_event: nil)
+        require "ruby_llm"
+
+        configure_from_environment
+        media_input = MediaInput.wrap(media)
+        content = ::RubyLLM::Content.new(objective.to_s)
+        content.add_attachment(media_input.attachment_source, filename: media_input.filename)
+
+        chat = ::RubyLLM.chat(model: model)
+        chat.with_schema(normalize_schema(output_schema)) if output_schema
+        chat.with_params(**params) if params && !params.empty?
+        chat.add_message(role: :user, content: content)
+
+        response = complete_without_tool_execution(chat)
+        normalize_media_analysis_response(response, media: media_input, model: model, provider: provider, params: params || {}, metadata: metadata)
+      end
+
       private
         def configure_from_environment
           config = ::RubyLLM.config
@@ -298,6 +315,29 @@ module TurnKit
           ).to_h.merge("type" => "image")
 
           Result.new(parts: [ part ], usage: usage, model: part["model"], output_data: { "type" => "image", "images" => [ part ] })
+        end
+
+        def normalize_media_analysis_response(response, media:, model:, provider:, params:, metadata:)
+          usage = Usage.new(
+            input_tokens: token_value(response, :input_tokens),
+            output_tokens: token_value(response, :output_tokens),
+            cached_tokens: token_value(response, :cached_tokens),
+            cache_write_tokens: token_value(response, :cache_creation_tokens),
+            thinking_tokens: thinking_token_value(response),
+            cost: response_cost(response)
+          )
+          part = MediaAnalysisResult.new(
+            text: response_text(response),
+            data: response_data(response),
+            model: response.respond_to?(:model_id) ? response.model_id : model,
+            provider: provider&.to_s,
+            usage: usage,
+            params: params,
+            media: media.to_h,
+            metadata: metadata || {}
+          ).to_h.merge("type" => "media_analysis")
+
+          Result.new(parts: [ part ], usage: usage, model: part["model"], output_data: { "type" => "media_analysis", "media_analyses" => [ part ] })
         end
 
         def image_usage_value(image, key)

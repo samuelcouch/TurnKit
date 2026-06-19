@@ -40,6 +40,18 @@ module TurnKit
       images.any?
     end
 
+    def media_analyses
+      parts.filter_map do |part|
+        next unless part["type"] == "media_analysis"
+
+        MediaAnalysisResult.from_h(part)
+      end
+    end
+
+    def media_analysis?
+      media_analyses.any?
+    end
+
     private
       def synthesize_parts(text:, tool_calls:)
         parts = []

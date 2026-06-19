@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 - 2026-06-19
+
+- Add first-class media analysis with `Turn#view_media`, `TurnKit.view_media`, and `TurnKit::ViewMediaTool`.
+- Normalize media inputs for paths, URLs, IO/bytes, and Rails Active Storage-compatible attachments.
+- Persist media analysis messages with model, provider, usage, cost, structured output, events, and output policy support.
+- Add a Gemini 3 Flash media-analysis smoke example.
+
 ## 0.4.0 - 2026-06-19
 
 - Add first-class image generation with `Turn#paint`, `TurnKit.paint`, and `TurnKit::ImageTool`.

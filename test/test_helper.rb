@@ -51,4 +51,11 @@ class FakeClient < TurnKit::Client
     @calls << { prompt: prompt, model: model, provider: provider, size: size, assume_model_exists: assume_model_exists, input_images: input_images, mask: mask, params: params, metadata: metadata, on_event: on_event }
     @results.shift || TurnKit::Result.new(parts: [ TurnKit::ImageResult.new(model: model, provider: provider&.to_s, metadata: metadata || {}).to_h.merge("type" => "image") ], model: model)
   end
+
+  def view_media(media:, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: nil, on_event: nil)
+    input = TurnKit::MediaInput.wrap(media)
+    @calls << { media: media, objective: objective, model: model, provider: provider, output_schema: output_schema, params: params, metadata: metadata, on_event: on_event }
+    analysis = TurnKit::MediaAnalysisResult.new(text: "reviewed", model: model, provider: provider&.to_s, media: input.to_h, metadata: metadata || {})
+    @results.shift || TurnKit::Result.new(parts: [ analysis.to_h.merge("type" => "media_analysis") ], model: model)
+  end
 end
