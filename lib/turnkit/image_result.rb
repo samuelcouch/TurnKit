@@ -23,6 +23,7 @@ module TurnKit
       @metadata = metadata || {}
     end
 
+    # Performs network IO when the image is URL-backed.
     def to_blob
       raise Error, "image has no url or data" if url.to_s.empty? && data.to_s.empty?
 

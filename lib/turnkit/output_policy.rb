@@ -75,7 +75,7 @@ module TurnKit
       else
         audit_client = client || TurnKit.client
         audit_client.validate!(model: model_name)
-        chat(audit_client, model: model_name, messages: audit_messages(output), tools: [], instructions: audit_instructions, thinking: thinking, output_schema: DEFAULT_SCHEMA, metadata: { output_policy: name })
+        audit_client.chat(model: model_name, messages: audit_messages(output), tools: [], instructions: audit_instructions, thinking: thinking, output_schema: DEFAULT_SCHEMA, metadata: { output_policy: name })
       end
       data = result.output_data || parse_json(result.text)
       return if data.fetch("approved", false)
@@ -109,20 +109,6 @@ module TurnKit
 
       def audit_messages(output)
         [ { role: :user, content: JSON.generate(output: output) } ]
-      end
-
-      def chat(client, **kwargs)
-        accepted = chat_keyword_names(client)
-        kwargs = kwargs.slice(*accepted) unless accepted.include?(:keyrest)
-        client.chat(**kwargs)
-      end
-
-      def chat_keyword_names(client)
-        client.method(:chat).parameters.filter_map do |kind, name|
-          return [ :keyrest ] if kind == :keyrest
-
-          name if %i[key keyreq].include?(kind)
-        end
       end
 
       def parse_json(value)

@@ -1,11 +1,12 @@
 # frozen_string_literal: true
 
+# Namespaces: TurnKit:: is the gem's domain layer (agents, conversations,
+# turns). The generated ActiveRecord models in app/models/turnkit live under
+# Turnkit:: and are pure persistence records used by the store below.
+#
+# Pass custom model class names if you moved or renamed the generated models:
+#   TurnKit::ActiveRecordStore.new(conversation_class: "My::Conversation", ...)
 TurnKit.store = TurnKit::ActiveRecordStore.new
-
-TurnKit.conversation_record_class = "Turnkit::Conversation"
-TurnKit.turn_record_class = "Turnkit::Turn"
-TurnKit.message_record_class = "Turnkit::Message"
-TurnKit.tool_execution_record_class = "Turnkit::ToolExecution"
 
 # TurnKit.default_model = "claude-sonnet-4-5"
 # TurnKit.max_iterations = 25
@@ -20,6 +21,6 @@ TurnKit.tool_execution_record_class = "Turnkit::ToolExecution"
 # TurnKit.available_skills = TurnKit::Skill.from_directory(Rails.root.join("app/ai/skills"))
 
 # Suggested Rails convention:
-# - app/ai/agents/* builds TurnKit::Agent objects for your workflows.
+# - app/ai/agents/* builds TurnKit::Agent objects and orchestrator agents.
 # - app/ai/tools/* defines TurnKit::Tool subclasses.
 # - app/ai/skills/* stores reusable Markdown skill files.

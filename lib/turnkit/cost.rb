@@ -48,42 +48,40 @@ module TurnKit
       from_usage(Usage.from_h(usage), model: attrs["model"])
     end
 
+    RATE_KEYS = %i[input output cache_read cache_write thinking].freeze
+
+    # Rates are USD per million tokens, keyed by component.
     def self.from_rates(usage, rates)
       rates = rates.transform_keys(&:to_sym)
+      unknown = rates.keys - RATE_KEYS
+      raise ConfigError, "unknown cost rate keys: #{unknown.join(", ")} (use: #{RATE_KEYS.join(", ")})" if unknown.any?
+
       new(
-        input: amount(usage.input_tokens, rates[:input] || rates[:input_per_million]),
-        output: amount(usage.output_tokens, rates[:output] || rates[:output_per_million]),
-        cache_read: amount(usage.cached_tokens, rates[:cache_read] || rates[:cached_input] || rates[:cache_read_input_per_million] || rates[:cached_input_per_million]),
-        cache_write: amount(usage.cache_write_tokens, rates[:cache_write] || rates[:cache_creation] || rates[:cache_write_input_per_million] || rates[:cache_creation_input_per_million]),
-        thinking: amount(usage.thinking_tokens, rates[:thinking] || rates[:reasoning] || rates[:thinking_output] || rates[:reasoning_output] || rates[:thinking_output_per_million] || rates[:reasoning_output_per_million]),
+        input: amount(usage.input_tokens, rates[:input]),
+        output: amount(usage.output_tokens, rates[:output]),
+        cache_read: amount(usage.cached_tokens, rates[:cache_read]),
+        cache_write: amount(usage.cache_write_tokens, rates[:cache_write]),
+        thinking: amount(usage.thinking_tokens, rates[:thinking]),
         strict: true
       )
     end
 
+    # Estimates cost from RubyLLM's model pricing registry (ruby_llm >= 1.16).
+    # Returns an empty Cost when ruby_llm is not loaded or the model is not in
+    # the registry; any other failure raises.
     def self.from_ruby_llm(usage, model)
-      require "ruby_llm"
+      return new unless defined?(::RubyLLM) && model
 
-      model_info = ::RubyLLM.models.find(model) if model
-      return new unless model_info
-
-      if defined?(::RubyLLM::Cost)
-        tokens = ::RubyLLM::Tokens.new(
-          input: usage.input_tokens,
-          output: usage.output_tokens,
-          cached: usage.cached_tokens,
-          cache_creation: usage.cache_write_tokens,
-          thinking: usage.thinking_tokens
-        )
-        from_hash(::RubyLLM::Cost.new(tokens: tokens, model: model_info).to_h)
-      else
-        from_rates(
-          usage,
-          input: model_info.input_price_per_million,
-          output: model_info.output_price_per_million,
-          cached_input: model_info.pricing&.text_tokens&.cached_input
-        )
-      end
-    rescue LoadError, StandardError
+      model_info = ::RubyLLM.models.find(model)
+      tokens = ::RubyLLM::Tokens.new(
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cached: usage.cached_tokens,
+        cache_creation: usage.cache_write_tokens,
+        thinking: usage.thinking_tokens
+      )
+      from_hash(::RubyLLM::Cost.new(tokens: tokens, model: model_info).to_h)
+    rescue ::RubyLLM::ModelNotFoundError
       new
     end
 
@@ -92,9 +90,9 @@ module TurnKit
       new(
         input: hash[:input],
         output: hash[:output],
-        cache_read: hash[:cache_read] || hash[:cached_input],
-        cache_write: hash[:cache_write] || hash[:cache_creation],
-        thinking: hash[:thinking] || hash[:reasoning] || hash[:thinking_output] || hash[:reasoning_output],
+        cache_read: hash[:cache_read],
+        cache_write: hash[:cache_write],
+        thinking: hash[:thinking],
         total: hash[:total]
       )
     end

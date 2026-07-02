@@ -84,6 +84,8 @@ examples/technical_explainer/
     technical_explainer.md     # Markdown skill with name/description frontmatter
     source_finder.md           # Markdown skill with name/description frontmatter
     implementation_review.md   # Markdown skill with name/description frontmatter
+  ../shared/
+    parallel_client.rb         # Shared Parallel Search/Extract HTTP client
   lib/tools/
     parallel_web_search.rb
     parallel_web_extract.rb

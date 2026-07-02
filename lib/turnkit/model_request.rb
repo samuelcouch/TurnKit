@@ -2,13 +2,14 @@
 
 module TurnKit
   class ModelRequest
-    attr_reader :model, :messages, :tools, :instructions, :thinking, :output_schema, :metadata, :report
+    attr_reader :model, :messages, :tools, :instructions, :dynamic_instructions, :thinking, :output_schema, :metadata, :report
 
-    def initialize(model:, messages:, tools:, instructions:, thinking: nil, output_schema: nil, metadata: {}, report: nil)
+    def initialize(model:, messages:, tools:, instructions:, dynamic_instructions: nil, thinking: nil, output_schema: nil, metadata: {}, report: nil)
       @model = model
       @messages = Array(messages)
       @tools = Array(tools)
       @instructions = instructions.to_s
+      @dynamic_instructions = dynamic_instructions.to_s
       @thinking = thinking
       @output_schema = output_schema
       @metadata = metadata || {}
@@ -25,6 +26,7 @@ module TurnKit
         "messages" => messages,
         "tools" => tool_names,
         "instructions" => instructions,
+        "dynamic_instructions" => dynamic_instructions,
         "thinking" => thinking,
         "output_schema" => output_schema,
         "metadata" => metadata,

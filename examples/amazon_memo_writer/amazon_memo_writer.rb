@@ -4,59 +4,12 @@ $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 
 require "benchmark"
 require "json"
-require "net/http"
-require "uri"
 require "turnkit"
+require_relative "../shared/parallel_client"
 
 module AmazonMemoWriter
   DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5")
   DEFAULT_TASK = "Write a memo recommending whether PhotoDay should add bib-number photo search for race events. Audience: founder and product lead. Decision deadline: this week."
-
-  class ParallelClient
-    API_BASE = "https://api.parallel.ai"
-
-    def initialize(api_key: ENV["PARALLEL_API_KEY"], api_base: API_BASE, open_timeout: 5, read_timeout: 45)
-      @api_key = api_key
-      @api_base = api_base
-      @open_timeout = open_timeout
-      @read_timeout = read_timeout
-    end
-
-    def search(objective:, search_queries:)
-      post("/v1/search", {
-        objective: objective,
-        search_queries: Array(search_queries)
-      })
-    end
-
-    def read_page(url:, objective:)
-      post("/v1/extract", {
-        urls: [ url.to_s ],
-        objective: objective
-      })
-    end
-
-    private
-      def post(path, payload)
-        raise ArgumentError, "PARALLEL_API_KEY is required for Amazon memo web tools" if @api_key.to_s.empty?
-
-        uri = URI.join(@api_base, path)
-        request = Net::HTTP::Post.new(uri)
-        request["Content-Type"] = "application/json"
-        request["x-api-key"] = @api_key
-        request.body = JSON.generate(payload)
-
-        response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https", open_timeout: @open_timeout, read_timeout: @read_timeout) do |http|
-          http.request(request)
-        end
-
-        body = response.body.to_s.empty? ? {} : JSON.parse(response.body)
-        return body if response.is_a?(Net::HTTPSuccess)
-
-        message = body.is_a?(Hash) ? body.dig("error", "message") : nil
-        raise "Parallel API #{response.code}: #{message || response.body}"
-      end
-  end
 
   class AmazonMemo
     EM_DASH = "—"
@@ -308,7 +261,7 @@ module AmazonMemoWriter
       parameter :objective, :string, required: true, description: "Research objective."
       parameter :search_queries, :array, required: true, description: "Two or three targeted search queries."
 
-      def initialize(parallel_client: ParallelClient.new)
+      def initialize(parallel_client: TurnKitExamples::ParallelClient.new)
         @parallel_client = parallel_client
       end
 
@@ -324,7 +277,7 @@ module AmazonMemoWriter
       parameter :url, :string, required: true, description: "URL returned by web_search."
       parameter :objective, :string, required: true, description: "What to extract from the page."
 
-      def initialize(parallel_client: ParallelClient.new)
+      def initialize(parallel_client: TurnKitExamples::ParallelClient.new)
         @parallel_client = parallel_client
       end
 
@@ -405,13 +358,14 @@ module AmazonMemoWriter
     )
   end
 
-  def self.workflow(model: DEFAULT_MODEL, thinking: { effort: :medium }, client: TurnKit::Adapters::RubyLLM.new, parallel_client: ParallelClient.new, on_event: nil, semantic_audit: true)
+  def self.workflow(model: DEFAULT_MODEL, thinking: { effort: :medium }, client: TurnKit::Adapters::RubyLLM.new, parallel_client: TurnKitExamples::ParallelClient.new, on_event: nil, semantic_audit: true)
     voice = memo_voice_skill
     policies = [ ->(output) { format_policy(output) } ]
     policies << semantic_policy(model: model, thinking: thinking) if semantic_audit
 
-    TurnKit::Workflow.new(
+    TurnKit::Agent.new(
       name: "amazon_memo_writer",
+      orchestrator: true,
       description: "Creates source-grounded Amazon-style memos.",
       model: model,
       thinking: thinking,
@@ -451,13 +405,13 @@ module AmazonMemoWriter
   end
 
   def self.accuracy(output, run)
-    read_sources = run.tool_calls.select { |tool| tool.tool_name == "read_web_page" && tool.completed? }.filter_map do |tool|
+    read_sources = run.tool_executions.select { |tool| tool.tool_name == "read_web_page" && tool.completed? }.filter_map do |tool|
       tool.result["url"] || tool.arguments["url"]
     end
     checks = {
-      searched_once: run.tool_calls.count { |tool| tool.tool_name == "web_search" && tool.completed? } == 1,
-      read_at_least_two_pages: run.tool_calls.count { |tool| tool.tool_name == "read_web_page" && tool.completed? } >= 2,
-      finalized_with_submit_tool: run.tool_calls.any? { |tool| tool.tool_name == "submit_amazon_memo" && tool.completed? },
+      searched_once: run.tool_executions.count { |tool| tool.tool_name == "web_search" && tool.completed? } == 1,
+      read_at_least_two_pages: run.tool_executions.count { |tool| tool.tool_name == "read_web_page" && tool.completed? } >= 2,
+      finalized_with_submit_tool: run.tool_executions.any? { |tool| tool.tool_name == "submit_amazon_memo" && tool.completed? },
       strict_format_clean: format_policy(output, expected_sources: read_sources).empty?,
       cites_read_sources: read_sources.uniq.count { |url| output.include?(url) } >= 2,
       audit_clean: run.policy_clean?
@@ -480,7 +434,7 @@ module AmazonMemoWriter
     TurnKit.timeout = 600
     TurnKit.output_policy_model = model
     TurnKit.output_policy_thinking = thinking
-    TurnKit.cost_rates[model] ||= { input: 1.25, output: 10.0, cached_input: 0.125, thinking: 10.0 }
+    TurnKit.cost_rates[model] ||= { input: 1.25, output: 10.0, cache_read: 0.125, thinking: 10.0 }
 
     events = []
     run = nil
@@ -497,12 +451,12 @@ module AmazonMemoWriter
       output_policy: run.policy_audit,
       model_calls: events.count { |event| event.type.end_with?("model.completed") },
       model_call_types: events.select { |event| event.type.end_with?("model.completed") }.map(&:type),
-      tool_calls: run.tool_calls.map { |tool| { name: tool.tool_name, status: tool.status, error: tool.error } }.map { |attrs| attrs.compact },
+      tool_calls: run.tool_executions.map { |tool| { name: tool.tool_name, status: tool.status, error: tool.error } }.map { |attrs| attrs.compact },
       usage: run.usage.to_h,
       cost: run.cost.to_h,
-      accuracy: accuracy(run.output, run),
+      accuracy: accuracy(run.output_text, run),
       event_types: events.map(&:type).uniq,
-      output: run.output
+      output: run.output_text
     }
   end
 end

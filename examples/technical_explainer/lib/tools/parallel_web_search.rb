@@ -9,8 +9,12 @@ module TechnicalExplainer
       parameter :search_queries, :array, required: true, description: "Two or three targeted keyword queries."
       parameter :session_id, :string, required: false, description: "Parallel session_id from a previous search or extract call."
 
+      def initialize(parallel_client: TurnKitExamples::ParallelClient.new)
+        @parallel_client = parallel_client
+      end
+
       def call(objective:, search_queries:, session_id: nil, context:)
-        TechnicalExplainer.parallel_client.search(
+        @parallel_client.search(
           objective: objective,
           search_queries: search_queries,
           session_id: session_id

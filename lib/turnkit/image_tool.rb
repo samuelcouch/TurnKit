@@ -11,8 +11,8 @@ module TurnKit
       end
     end
 
-    def call(turnkit_context:, **arguments)
-      turnkit_context.turn.paint(
+    def call(context:, **arguments)
+      context.turn.paint(
         prompt(**arguments),
         model: self.class.model,
         provider: self.class.provider,

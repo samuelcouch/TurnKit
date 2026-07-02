@@ -2,26 +2,46 @@
 
 module TurnKit
   class Agent
+    ORCHESTRATOR_PREAMBLE = <<~TEXT.strip
+      You are an autonomous task orchestrator. Navigate from the application
+      request to a final output without asking the user follow-up questions.
+
+      Use the available tools to gather context, inspect sources, take actions,
+      persist outputs, and verify work. Use loaded skills as reusable workflow
+      patterns. Iterate when work needs missing context, critique, revision, or
+      verification.
+
+      When multiple independent items need the same kind of fetch or read, and
+      an available batch tool can handle them in one call, prefer the batch tool
+      over repeated one-item tool calls.
+
+      Stop when the task is complete, when the available context and tools are
+      sufficient for the best possible answer, or when further iteration would
+      not materially improve the result. Respect runtime, cost, and iteration
+      limits.
+    TEXT
+
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :max_spend, :max_depth, :max_tool_executions, :max_tool_executions_by_name
     attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction, :output_schema, :input_schema, :on_event
     attr_reader :output_policy, :output_policy_mode, :output_policy_model, :output_retries
 
-    def initialize(name:, description: "", model: nil, instructions: "", tools: [], skills: [], available_skills: [], sub_agents: [],
+    def initialize(name:, description: "", model: nil, instructions: "", orchestrator: false, tools: [], skills: [], available_skills: [], sub_agents: [],
       system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
       max_iterations: nil, timeout: nil, max_spend: nil, max_depth: nil, max_tool_executions: nil, max_tool_executions_by_name: nil, thinking: nil, compaction: nil,
       output_schema: nil, input_schema: nil, output_policy: nil, output_policy_mode: nil, output_policy_model: nil, output_policy_thinking: nil, output_retries: 0, on_event: nil)
       @name = name.to_s
       @description = description.to_s
       @model = model
-      @instructions = instructions.to_s
+      @orchestrator = orchestrator ? true : false
+      @instructions = compose_instructions(instructions)
       @tools = Array(tools)
       @skills = Array(skills)
       @available_skills = Array(available_skills)
       @sub_agents = Array(sub_agents)
       @system_prompt = system_prompt
       @prompt_sections = prompt_sections
-      @prompt_mode = prompt_mode&.to_sym
+      @prompt_mode = prompt_mode&.to_sym || (:task if @orchestrator)
       @client = client
       @store = store
       @max_iterations = max_iterations
@@ -69,8 +89,11 @@ module TurnKit
       Conversation.new(agent: self, record: record, store: store, model: model || effective_model, subject: subject, metadata: metadata)
     end
 
-    def run(prompt = nil, task: nil, input: nil, async: false, subject: nil, metadata: {}, parent_run: nil, root_turn_id: nil, prompt_mode: :task, **options)
-      task = task || prompt
+    def orchestrator?
+      @orchestrator
+    end
+
+    def run(task, input: nil, async: false, subject: nil, metadata: {}, parent_run: nil, root_turn_id: nil, prompt_mode: :task, **options)
       raise ArgumentError, "task is required" if task.to_s.empty?
       SchemaCheck.validate!(input, input_schema, error_class: InputError, label: "input") if input_schema
 
@@ -151,16 +174,19 @@ module TurnKit
       end
     end
 
-    def build_budget(root_started_at: Clock.now)
-      Budget.new(
+    def budget_limits
+      {
         max_iterations: max_iterations || TurnKit.max_iterations,
         timeout: timeout || TurnKit.timeout,
         max_depth: max_depth || TurnKit.max_depth,
         max_tool_executions: max_tool_executions || TurnKit.max_tool_executions,
         max_tool_executions_by_name: max_tool_executions_by_name || TurnKit.max_tool_executions_by_name,
-        max_spend: max_spend || TurnKit.max_spend,
-        root_started_at: root_started_at
-      )
+        max_spend: max_spend || TurnKit.max_spend
+      }
+    end
+
+    def build_budget(root_started_at: Clock.now)
+      Budget.new(**budget_limits, root_started_at: root_started_at)
     end
 
     def instructions_with_skills
@@ -170,6 +196,13 @@ module TurnKit
     end
 
     private
+      def compose_instructions(instructions)
+        parts = []
+        parts << ORCHESTRATOR_PREAMBLE if @orchestrator
+        parts << instructions.to_s.strip unless instructions.to_s.strip.empty?
+        parts.join("\n\n")
+      end
+
       def validate_tools!
         effective_tools.each do |tool|
           next if tool.is_a?(Class) && tool < Tool

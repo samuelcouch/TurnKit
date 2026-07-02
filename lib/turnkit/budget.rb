@@ -29,7 +29,7 @@ module TurnKit
 
     def seed!(turns:, tool_executions:)
       @mutex.synchronize do
-        @iterations = Array(turns).sum { |turn| (turn["options"] || {})["iterations"].to_i }
+        @iterations = Array(turns).sum { |turn| Turn.iterations_for(turn) }
         completed = Array(tool_executions).select { |execution| %w[completed failed].include?(execution["status"]) && !execution.dig("error", "details", "budget_denied") }
         @tool_executions = completed.length
         completed.each { |execution| @tool_executions_by_name[execution.fetch("tool_name").to_s] += 1 }

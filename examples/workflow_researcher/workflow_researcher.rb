@@ -3,67 +3,16 @@
 $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 
 require "json"
-require "net/http"
-require "uri"
 require "turnkit"
+require_relative "../shared/parallel_client"
 
 module WorkflowResearcher
-  def self.web_tools(parallel_client: ParallelClient.new)
+  def self.web_tools(parallel_client: TurnKitExamples::ParallelClient.new)
     [
       Tools::WebSearch.new(parallel_client: parallel_client),
       Tools::ReadWebPages.new(parallel_client: parallel_client),
       Tools::ReadWebPage.new(parallel_client: parallel_client)
     ]
-  end
-
-  class ParallelClient
-    API_BASE = "https://api.parallel.ai"
-
-    def initialize(api_key: ENV["PARALLEL_API_KEY"], api_base: API_BASE, open_timeout: 5, read_timeout: 45)
-      @api_key = api_key
-      @api_base = api_base
-      @open_timeout = open_timeout
-      @read_timeout = read_timeout
-    end
-
-    def search(objective:, search_queries:)
-      post("/v1/search", {
-        objective: objective,
-        search_queries: Array(search_queries)
-      })
-    end
-
-    def read_page(url:, objective:)
-      read_pages(urls: [url], objective: objective)
-    end
-
-    def read_pages(urls:, objective:)
-      post("/v1/extract", {
-        urls: Array(urls),
-        objective: objective
-      })
-    end
-
-    private
-      def post(path, payload)
-        raise ArgumentError, "PARALLEL_API_KEY is required for web tools" if @api_key.to_s.empty?
-
-        uri = URI.join(@api_base, path)
-        request = Net::HTTP::Post.new(uri)
-        request["Content-Type"] = "application/json"
-        request["x-api-key"] = @api_key
-        request.body = JSON.generate(payload)
-
-        response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https", open_timeout: @open_timeout, read_timeout: @read_timeout) do |http|
-          http.request(request)
-        end
-
-        body = response.body.to_s.empty? ? {} : JSON.parse(response.body)
-        return body if response.is_a?(Net::HTTPSuccess)
-
-        message = body.is_a?(Hash) ? body.dig("error", "message") : nil
-        raise "Parallel API #{response.code}: #{message || response.body}"
-      end
   end
 
   module Tools
@@ -74,7 +23,7 @@ module WorkflowResearcher
       parameter :objective, :string, required: true, description: "Natural-language research objective."
       parameter :search_queries, :array, required: true, description: "Two or three targeted keyword queries."
 
-      def initialize(parallel_client: ParallelClient.new)
+      def initialize(parallel_client: TurnKitExamples::ParallelClient.new)
         @parallel_client = parallel_client
       end
 
@@ -90,7 +39,7 @@ module WorkflowResearcher
       parameter :url, :string, required: true, description: "Public URL to read."
       parameter :objective, :string, required: true, description: "What to extract or focus on from the page."
 
-      def initialize(parallel_client: ParallelClient.new)
+      def initialize(parallel_client: TurnKitExamples::ParallelClient.new)
         @parallel_client = parallel_client
       end
 
@@ -108,7 +57,7 @@ module WorkflowResearcher
       parameter :urls, :array, required: true, description: "Public URLs to read, up to 8."
       parameter :objective, :string, required: true, description: "What to extract or focus on from the pages."
 
-      def initialize(parallel_client: ParallelClient.new)
+      def initialize(parallel_client: TurnKitExamples::ParallelClient.new)
         @parallel_client = parallel_client
       end
 
@@ -123,7 +72,7 @@ module WorkflowResearcher
 end
 
 TurnKit.configure do |config|
-  config.model = ENV.fetch("TURNKIT_MODEL", "gpt-5.2")
+  config.default_model = ENV.fetch("TURNKIT_MODEL", "gpt-5.2")
   config.store = TurnKit::MemoryStore.new
   config.compaction = {
     context_limit: Integer(ENV.fetch("TURNKIT_CONTEXT_LIMIT", "64000")),
@@ -147,14 +96,15 @@ TurnKit.on_event = ->(event) do
   warn "turnkit.#{event.type} turn=#{event.turn_id} payload=#{event.payload.inspect}"
 end
 
-model = TurnKit.model
+model = TurnKit.default_model
 request = ARGV.join(" ").strip
 request = "Create a source-grounded brief on Rails 8 Solid Queue for a Rails founder." if request.empty?
 
 source_grounded_brief = TurnKit::Skill.from_file(File.join(__dir__, "skills", "source_grounded_brief.md"))
 
-workflow = TurnKit::Workflow.new(
+agent = TurnKit::Agent.new(
   name: "source_brief_orchestrator",
+  orchestrator: true,
   description: "Creates source-grounded briefs with web research and verification.",
   model: model,
   skills: [source_grounded_brief],
@@ -173,7 +123,7 @@ workflow = TurnKit::Workflow.new(
 )
 
 puts "Running workflow..."
-run = workflow.run(
+run = agent.run(
   "Create a source-grounded brief for the request.",
   input: { request: request }
 )
@@ -184,7 +134,7 @@ if run.failed?
 end
 
 puts
-puts run.output
+puts run.output_text
 puts
 puts "--- Run graph ---"
 puts "turns: #{run.turn_records.map { |record| record.fetch("agent_name") }.join(" -> ")}"
@@ -226,7 +176,7 @@ if ENV["DEEP_MONITORING"]
     messages = TurnKit.store.list_messages(conversation.fetch("id"))
     puts "- turn=#{record.fetch("id")} agent=#{record.fetch("agent_name")} conversation=#{conversation.fetch("id")} messages=#{messages.length}"
     messages.each do |message|
-      text = message["text"].to_s.gsub(/\s+/, " ").strip
+      text = TurnKit::Message.new(message).text.gsub(/\s+/, " ").strip
       text = "#{text[0, 240]}..." if text.length > 240
       puts "  ##{message.fetch("sequence")} #{message.fetch("role")}/#{message.fetch("kind")}: #{text}"
     end

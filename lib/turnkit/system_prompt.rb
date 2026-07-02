@@ -3,7 +3,6 @@
 module TurnKit
   class SystemPrompt
     DEFAULT_SECTIONS = %i[agent instructions behavior loaded_skills available_skills tools subject live_context environment].freeze
-    CACHE_BOUNDARY = "<!-- TURNKIT_DYNAMIC_PROMPT_BOUNDARY -->"
     NONE_PROMPT = "You are an assistant running inside TurnKit."
     PROMPT_MODES = %i[full minimal task none].freeze
     MODE_SECTIONS = {
@@ -13,7 +12,6 @@ module TurnKit
       none: []
     }.freeze
     DYNAMIC_SECTIONS = %i[subject live_context environment].freeze
-    OVERRIDABLE_SECTIONS = %i[behavior tools].freeze
 
     SECTION_METHODS = {
       agent: :agent_section,
@@ -92,43 +90,27 @@ module TurnKit
       raise ArgumentError, "unknown prompt mode: #{@mode}" unless PROMPT_MODES.include?(@mode)
 
       @sections = Array(sections || prompt_sections_for_mode)
-      @prompt_contribution = nil
+    end
+
+    # The prompt splits into a stable part (identical across turns of the same
+    # agent, safe to cache) and a dynamic part (subject, live context,
+    # environment) recomputed each turn. Adapters that support prompt caching
+    # receive both via ModelRequest#instructions and #dynamic_instructions.
+    def stable
+      parts.fetch(0).join("\n\n")
+    end
+
+    def dynamic
+      parts.fetch(1).join("\n\n")
     end
 
     def to_s
-      return NONE_PROMPT if mode == :none
-
-      values = []
-      contribution = prompt_contribution
-      values << contribution.stable_prefix unless contribution.stable_prefix.empty?
-
-      boundary_inserted = false
-      sections.each do |section|
-        rendered = render(section)
-        next if rendered.nil? || rendered.strip.empty?
-
-        if dynamic_section?(section) && !boundary_inserted
-          values << CACHE_BOUNDARY
-          boundary_inserted = true
-        end
-
-        values << rendered
-      end
-
-      unless contribution.dynamic_suffix.empty?
-        values << CACHE_BOUNDARY unless boundary_inserted
-        values << contribution.dynamic_suffix
-      end
-
-      values.compact.reject { |value| value.strip.empty? }.join("\n\n")
+      [ stable, dynamic ].reject(&:empty?).join("\n\n")
     end
 
     def render(section)
       method = SECTION_METHODS[section.to_sym]
       raise ArgumentError, "unknown prompt section: #{section}" unless method
-
-      override = section_override(section)
-      return tagged(section, override) if override
 
       public_send(method)
     end
@@ -292,11 +274,9 @@ module TurnKit
 
     def report
       text = to_s
-      stable, dynamic = self.class.split_cache_boundary(text)
       {
         "chars" => text.length,
         "hash" => Digest::SHA256.hexdigest(text),
-        "has_cache_boundary" => text.include?(CACHE_BOUNDARY),
         "stable_chars" => stable.length,
         "dynamic_chars" => dynamic.length,
         "sections" => sections.map(&:to_s),
@@ -304,12 +284,27 @@ module TurnKit
       }
     end
 
-    def self.split_cache_boundary(text)
-      stable, dynamic = text.to_s.split(CACHE_BOUNDARY, 2)
-      [ stable.to_s, dynamic.to_s ]
-    end
-
     private
+      def parts
+        @parts ||= build_parts
+      end
+
+      def build_parts
+        return [ [ NONE_PROMPT ], [] ] if mode == :none
+
+        stable_parts = []
+        dynamic_parts = []
+        target = stable_parts
+        sections.each do |section|
+          rendered = render(section)
+          next if rendered.nil? || rendered.strip.empty?
+
+          target = dynamic_parts if dynamic_section?(section)
+          target << rendered
+        end
+        [ stable_parts, dynamic_parts ]
+      end
+
       def tagged(name, content)
         "<#{name}>\n#{content}\n</#{name}>"
       end
@@ -383,64 +378,5 @@ module TurnKit
         end
       end
 
-      def prompt_contribution
-        @prompt_contribution ||= merge_prompt_contributions(resolve_prompt_contributions)
-      end
-
-      def resolve_prompt_contributions
-        contributors = Array(TurnKit.system_prompt_contributors)
-        contributors += matching_model_prompt_contributors
-        contributors.filter_map do |contributor|
-          value = contributor.respond_to?(:call) ? contributor.call(prompt_build_context) : contributor
-          normalize_prompt_contribution(value)
-        end
-      end
-
-      def matching_model_prompt_contributors
-        model_name = (turn.model || agent.effective_model).to_s
-        TurnKit.model_prompt_contributors.flat_map do |matcher, contributor|
-          matches = case matcher
-          when Regexp
-            matcher.match?(model_name)
-          else
-            matcher.to_s == model_name
-          end
-          matches ? Array(contributor) : []
-        end
-      end
-
-      def normalize_prompt_contribution(value)
-        case value
-        when nil, false
-          nil
-        when PromptContribution
-          value
-        when Hash
-          PromptContribution.new(
-            stable_prefix: value[:stable_prefix] || value["stable_prefix"],
-            dynamic_suffix: value[:dynamic_suffix] || value["dynamic_suffix"],
-            section_overrides: value[:section_overrides] || value["section_overrides"]
-          )
-        else
-          PromptContribution.new(stable_prefix: value.to_s)
-        end
-      end
-
-      def merge_prompt_contributions(contributions)
-        stable_prefix = contributions.map(&:stable_prefix).reject(&:empty?).join("\n\n")
-        dynamic_suffix = contributions.map(&:dynamic_suffix).reject(&:empty?).join("\n\n")
-        section_overrides = contributions.each_with_object({}) do |contribution, overrides|
-          overrides.merge!(contribution.section_overrides)
-        end
-        PromptContribution.new(stable_prefix: stable_prefix, dynamic_suffix: dynamic_suffix, section_overrides: section_overrides)
-      end
-
-      def section_override(section)
-        key = section.to_sym
-        return nil unless OVERRIDABLE_SECTIONS.include?(key)
-
-        value = prompt_contribution.section_overrides[key]
-        value.to_s unless value.nil?
-      end
   end
 end

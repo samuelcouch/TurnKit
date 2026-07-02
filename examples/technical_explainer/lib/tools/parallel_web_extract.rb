@@ -10,8 +10,12 @@ module TechnicalExplainer
       parameter :search_queries, :array, required: false, description: "Optional keyword queries to focus extracted excerpts."
       parameter :session_id, :string, required: false, description: "Parallel session_id from a previous search or extract call."
 
+      def initialize(parallel_client: TurnKitExamples::ParallelClient.new)
+        @parallel_client = parallel_client
+      end
+
       def call(urls:, objective:, search_queries: nil, session_id: nil, context:)
-        TechnicalExplainer.parallel_client.extract(
+        @parallel_client.extract(
           urls: urls,
           objective: objective,
           search_queries: search_queries,

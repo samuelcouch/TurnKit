@@ -3,10 +3,10 @@
 $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 
 require "turnkit"
+require_relative "../shared/parallel_client"
 require_relative "lib/models"
 require_relative "lib/prompt_files"
 require_relative "lib/store"
-require_relative "lib/parallel_client"
 require_relative "lib/tools/parallel_web_search"
 require_relative "lib/tools/parallel_web_extract"
 require_relative "lib/tools/save_source_document"
@@ -22,7 +22,7 @@ module TechnicalExplainer
 end
 
 TechnicalExplainer.store = TechnicalExplainer::Store.new
-TechnicalExplainer.parallel_client = TechnicalExplainer::ParallelClient.new
+TechnicalExplainer.parallel_client = TurnKitExamples::ParallelClient.new
 
 TurnKit.default_model = ENV["TURNKIT_MODEL"] || if !ENV.fetch("ANTHROPIC_API_KEY", "").empty?
   TurnKit.default_model
@@ -70,8 +70,8 @@ agent = TurnKit::Agent.new(
   thinking: thinking,
   skills: skills,
   tools: [
-    TechnicalExplainer::Tools::ParallelWebSearch,
-    TechnicalExplainer::Tools::ParallelWebExtract,
+    TechnicalExplainer::Tools::ParallelWebSearch.new(parallel_client: TechnicalExplainer.parallel_client),
+    TechnicalExplainer::Tools::ParallelWebExtract.new(parallel_client: TechnicalExplainer.parallel_client),
     TechnicalExplainer::Tools::SaveSourceDocument,
     TechnicalExplainer::Tools::SaveConcept,
     TechnicalExplainer::Tools::SaveImplementationConcern,

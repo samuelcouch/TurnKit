@@ -27,14 +27,14 @@ follow-up thread and no reusable workflow policy.
 ruby examples/core_api/02_agent_run.rb
 ```
 
-## 3. Workflow: reusable task runner
+## 3. Orchestrator agent: reusable task runner
 
-Use `TurnKit::Workflow` when a run becomes a named production capability with a
+Use an orchestrator `TurnKit::Agent` (`orchestrator: true`) when a run becomes a named production capability with a
 repeatable procedure, tools, skills, limits, and observability.
 
 This example packages a renewal-risk workflow with a Markdown skill file
 (`skills/renewal_risk_review.md`), CRM lookup tool, and runtime limits. The
-workflow calls a tool, consumes the result, and returns a recommendation.
+orchestrator agent calls a tool, consumes the result, and returns a recommendation.
 
 ```sh
 ruby examples/core_api/03_workflow.rb
@@ -45,12 +45,11 @@ Rule of thumb:
 ```text
 Conversation      = talk over time
 Agent#run         = one job now
-TurnKit::Workflow = reusable job runner
+orchestrator Agent = reusable job runner
 ```
 
-Even the conversation and workflow examples use an `Agent` internally because
-`Agent` is the primitive. The question is which shape your application should
-hold onto: a durable `Conversation`, a one-off `Run`, or a reusable `Workflow`.
+The question is which shape your application should hold onto: a durable
+`Conversation`, a one-off `Run`, or a reusable orchestrator `Agent`.
 
 ## More workflow examples
 

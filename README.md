@@ -4,8 +4,8 @@
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1-red.svg)](https://www.ruby-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.md)
 
-Build durable Ruby and Rails agents with conversations, runs, workflows, tools,
-skills, output audits, sub-agents, and persistence.
+Build durable Ruby and Rails agents with conversations, runs, orchestrator agents,
+tools, skills, output audits, sub-agents, and persistence.
 
 ## Installation
 
@@ -13,6 +13,9 @@ Add this line to your application's **Gemfile**:
 
 ```ruby
 gem "turnkit"
+
+# Required only when using TurnKit's default RubyLLM adapter.
+gem "ruby_llm", "~> 1.16"
 ```
 
 Run:
@@ -21,7 +24,7 @@ Run:
 bundle install
 ```
 
-Upgrading from an earlier TurnKit version? See the [Upgrade Guide](UPGRADE.md).
+Upgrading from an earlier TurnKit version? See the [0.4.2 Upgrade Guide](UPGRADE_TO_0_4_2.md).
 
 ## Quick Start
 
@@ -49,11 +52,11 @@ turn = agent.conversation.ask("Explain Ruby blocks in one sentence.")
 puts turn.output_text
 ```
 
-Or run a non-interactive application task:
+Or run a non-interactive application task.
 
 ```ruby
 run = agent.run("Explain Ruby blocks in one sentence.")
-puts run.output
+puts run.output_text
 ```
 
 ## Usage
@@ -63,9 +66,9 @@ For runnable, API-key-free examples of the three core entry points, see
 
 - conversation: durable thread over time;
 - agent run: one bounded application task;
-- workflow: reusable task runner with skills, tools, and limits.
+- orchestrator agent: reusable task runner with skills, tools, and limits.
 
-For fuller workflow examples, see:
+For fuller orchestrator examples, see:
 
 - [`examples/workflow_researcher`](examples/workflow_researcher): source-grounded research with web tools, batch reads, per-tool limits, and deep monitoring;
 - [`examples/amazon_memo_writer`](examples/amazon_memo_writer): strict memo generation with research tools, a structured terminal submit tool, deterministic format checks, and an LLM output policy.
@@ -75,14 +78,14 @@ For fuller workflow examples, see:
 Set a model:
 
 ```ruby
-TurnKit.model = "gpt-4.1-mini"
+TurnKit.default_model = "gpt-4.1-mini"
 ```
 
 Or configure TurnKit in one place:
 
 ```ruby
 TurnKit.configure do |config|
-  config.model = "gpt-4.1-mini"
+  config.default_model = "gpt-4.1-mini"
   config.max_spend = 0.25
   config.max_iterations = 12
 end
@@ -116,7 +119,7 @@ Then configure TurnKit:
 ```ruby
 TurnKit.configure do |config|
   config.client = TurnKit::Adapters::Codex.new(sandbox: "read-only")
-  config.model = "gpt-5.4"
+  config.default_model = "gpt-5.4"
 end
 ```
 
@@ -186,26 +189,26 @@ small wrapper over TurnKit's existing conversation and turn engine. Existing
 Prepare a pending run without calling the model:
 
 ```ruby
-run = agent.run(task: "Classify later.", async: true)
+run = agent.run("Classify later.", async: true)
 request = run.preview
 run.run!
 ```
 
-### Workflows
+### Orchestrator agents
 
-Use a workflow when a run graduates into a reusable production capability: a
-named task runner with workflow skills, tools, defaults, guardrails, compaction,
-and output policy.
+Use an orchestrator agent when a run graduates into a reusable production
+capability: a named task runner with skills, tools, defaults, guardrails,
+compaction, and output policy.
 
-Workflows fight for their life when the task has a repeatable operating
-procedure: inspect app data, gather context, use sources, draft, verify, save,
-and stop under budget. They are overkill for simple classification or extraction
-runs.
+Orchestrator agents fight for their life when the task has a repeatable
+operating procedure: inspect app data, gather context, use sources, draft,
+verify, save, and stop under budget. They are overkill for simple classification
+or extraction runs.
 
 ```ruby
 source_grounded_brief = TurnKit::Skill.from_file("app/ai/skills/source_grounded_brief.md")
 
-workflow = TurnKit::Workflow.new(
+agent = TurnKit::Agent.new(
   name: "brief_writer",
   instructions: "Create source-grounded briefs and verify claims before final output.",
   skills: [source_grounded_brief],
@@ -220,16 +223,17 @@ workflow = TurnKit::Workflow.new(
   compaction: {
     context_limit: 64_000,
     threshold: 0.75
-  }
+  },
+  orchestrator: true
 )
 
-run = workflow.run(
+run = agent.run(
   "Create a source-grounded brief.",
   input: { topic: "Rails 8 Solid Queue" }
 )
 
-puts run.output
-puts run.tool_calls.map(&:tool_name)
+puts run.output_text
+puts run.tool_executions.map(&:tool_name)
 puts run.cost.total
 ```
 
@@ -240,11 +244,11 @@ model-tool loop:
 model → tool → result → model → tool → result → final
 ```
 
-For repeated workflows, keep instructions, skills, and tools stable and pass the
+For repeated orchestrator runs, keep instructions, skills, and tools stable and pass the
 per-run data through `input:`. This gives provider prompt caching the best chance
-to reuse the stable workflow prompt while each run supplies dynamic data.
+to reuse the stable agent prompt while each run supplies dynamic data.
 
-### Choosing runs, conversations, and workflows
+### Choosing runs, conversations, and orchestrator agents
 
 Use the smallest entry point that matches the shape of work:
 
@@ -252,7 +256,7 @@ Use the smallest entry point that matches the shape of work:
 | --- | --- | --- |
 | `Conversation` | A user or app will keep adding messages over time. | Best for durable threads and follow-up steering; history grows, so long threads need compaction. |
 | `Agent#run` | Your app needs one bounded result now. | Best for simple production tasks; repeated complex policies can sprawl across callers. |
-| `TurnKit::Workflow` | A task becomes a named reusable workflow with tools, skills, limits, and observability. | Best cache and packaging story for repeated autonomous work; overkill for one-off/simple tasks. |
+| `Agent.new(orchestrator: true)` | A task becomes a named reusable agent with tools, skills, limits, and observability. | Best cache and packaging story for repeated autonomous work; overkill for one-off/simple tasks. |
 
 Prompt caching and compaction solve different problems:
 
@@ -262,7 +266,7 @@ Prompt caching and compaction solve different problems:
 - budgets (`max_spend`, `max_iterations`, `max_tool_executions`) keep autonomous
   loops bounded.
 
-Use `max_tool_executions_by_name` when a workflow needs different budgets for
+Use `max_tool_executions_by_name` when an orchestrator needs different budgets for
 different tools. For example, allow many cheap reads but only one final submit
 tool, or cap web searches while allowing a batch page reader.
 
@@ -270,19 +274,25 @@ Reach for separate agents and `sub_agents` only when the isolation is worth the
 extra model calls, such as different models, different tool permissions,
 parallel specialist review, or separate durable child conversations.
 
-Run a workflow with `run`:
+Run an orchestrator agent with `run`:
 
 ```ruby
-run = workflow.run(
-  "Create compliant outreach for this account.",
-  input: lead.attributes,
+outreach_agent = TurnKit::Agent.new(
+  name: "outreach_writer",
+  instructions: "Create compliant outreach for accounts.",
   max_spend: 0.25,
   max_iterations: 8,
   max_tool_executions: 20,
   compaction: {
     context_limit: 64_000,
     threshold: 0.75
-  }
+  },
+  orchestrator: true
+)
+
+run = outreach_agent.run(
+  "Create compliant outreach for this account.",
+  input: lead.attributes
 )
 ```
 
@@ -329,10 +339,11 @@ numbered_lists_only = ->(output) do
   }
 end
 
-workflow = TurnKit::Workflow.new(
+agent = TurnKit::Agent.new(
   name: "memo_writer",
   output_policy: [no_em_dash, numbered_lists_only],
-  output_policy_mode: :fail
+  output_policy_mode: :fail,
+  orchestrator: true
 )
 ```
 
@@ -354,18 +365,19 @@ policy can be a `.md`, `.markdown`, or `.txt` file path, a `TurnKit::Skill`, a
 `TurnKit::OutputPolicy`, or any object that responds to `#call` or `#check`.
 
 ```ruby
-workflow = TurnKit::Workflow.new(
+agent = TurnKit::Agent.new(
   name: "memo_writer",
   output_policy: "app/ai/policies/amazon_memo.md",
   output_policy_model: "gpt-4.1-mini",
   output_policy_thinking: { effort: :low },
-  output_policy_mode: :report
+  output_policy_mode: :report,
+  orchestrator: true
 )
 ```
 
 `output_policy_mode: :report` records violations while allowing the run to
 complete. `:fail` marks the run failed after recording the output and audit;
-`:fail` is the default for contract-driven workflows. Policy model usage and
+`:fail` is the default for contract-driven orchestrator runs. Policy model usage and
 cost are counted on the parent run.
 
 Add `output_retries:` to turn policy failures into bounded revision loops instead
@@ -374,7 +386,7 @@ of dead ends:
 ```ruby
 voice = TurnKit::Skill.from_file("app/ai/skills/memo_voice.md")
 
-workflow = TurnKit::Workflow.new(
+agent = TurnKit::Agent.new(
   name: "memo_writer",
   skills: [voice],
   output_policy: [voice, no_em_dash],
@@ -383,7 +395,8 @@ workflow = TurnKit::Workflow.new(
     "type" => "object",
     "required" => ["project_id"],
     "properties" => { "project_id" => { "type" => "string" } }
-  }
+  },
+  orchestrator: true
 )
 ```
 
@@ -417,6 +430,27 @@ Run the reviewed turn:
 ```ruby
 turn.run!
 ```
+
+
+### Prompt customization
+
+Customize generated prompts with `system_prompt:` on an agent. A string replaces
+the generated prompt. A callable receives the built `TurnKit::SystemPrompt` and
+returns the final string:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "reporter",
+  system_prompt: ->(prompt) {
+    [prompt.stable, prompt.section(:tools), prompt.dynamic].reject(&:empty?).join("\n\n")
+  }
+)
+```
+
+`TurnKit::SystemPrompt` supports `to_s`, `section(:tools)`, `stable`, and
+`dynamic`. `prompt_sections:`, `TurnKit.prompt_sections`,
+`TurnKit.prompt_behavior`, and `TurnKit.context_contributors` remain available
+for generated prompts.
 
 ### Tools
 
@@ -479,7 +513,7 @@ image.to_blob   # generated bytes for base64 responses, or fetched URL bytes
 image.mime_type # "image/png"
 ```
 
-For reusable workflow steps, subclass `TurnKit::ImageTool`:
+For reusable agent steps, subclass `TurnKit::ImageTool`:
 
 ```ruby
 class GenerateHeaderImage < TurnKit::ImageTool
@@ -546,7 +580,7 @@ media = TurnKit::MediaInput.bytes(
 )
 ```
 
-For reusable workflow steps, subclass `TurnKit::ViewMediaTool`:
+For reusable agent steps, subclass `TurnKit::ViewMediaTool`:
 
 ```ruby
 class ReviewHeaderImage < TurnKit::ViewMediaTool
@@ -717,12 +751,6 @@ Compact manually:
 conversation.compact!(focus: "billing migration")
 ```
 
-Run the local smoke test:
-
-```sh
-ruby script/manual_compaction.rb
-```
-
 ### Rails
 
 Install Rails persistence:
@@ -743,6 +771,17 @@ Use this layout:
 app/ai/agents/
 app/ai/tools/
 app/ai/skills/
+```
+
+Use custom Active Record classes by passing class names to the store:
+
+```ruby
+TurnKit.store = TurnKit::ActiveRecordStore.new(
+  conversation_class: "My::Conversation",
+  turn_class: "My::Turn",
+  message_class: "My::Message",
+  tool_execution_class: "My::ToolExecution"
+)
 ```
 
 Reconcile stale turns:
@@ -782,6 +821,25 @@ TurnKit.timeout = 300
 
 `max_spend` is the only spend-limit name in the public API.
 
+
+Customize cost rates with USD-per-million-token component keys:
+
+```ruby
+TurnKit.cost_rates["custom-model"] = {
+  input: 0.15,
+  output: 0.60,
+  cache_read: 0.03,
+  cache_write: 0.18,
+  thinking: 0.60
+}
+```
+
+Custom clients should subclass `TurnKit::Client` or accept the full `#chat`
+keyword contract, including `dynamic_instructions:`. Adapters that support prompt
+caching should cache `instructions` and append `dynamic_instructions` per turn.
+
+Custom stores must implement `claim_turn` atomically.
+
 Set options per agent:
 
 ```ruby
@@ -805,7 +863,10 @@ agent = TurnKit::Agent.new(
 
 ## Upgrading
 
-Add `output_data` for structured output persistence.
+See the [0.4.2 Upgrade Guide](UPGRADE_TO_0_4_2.md) for the full API migration checklist.
+
+Rails installs from older versions may need `output_data` for structured output,
+image, and media-analysis persistence.
 
 ```ruby
 add_column :turnkit_turns, :output_data, :json

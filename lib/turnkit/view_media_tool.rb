@@ -11,8 +11,8 @@ module TurnKit
       end
     end
 
-    def call(turnkit_context:, **arguments)
-      turnkit_context.turn.view_media(
+    def call(context:, **arguments)
+      context.turn.view_media(
         media(**arguments),
         objective: objective(**arguments),
         model: self.class.model,

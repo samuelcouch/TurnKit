@@ -24,8 +24,6 @@ module TurnKit
       !data.nil?
     end
 
-    alias structured? data?
-
     def cost
       Cost.from_usage(usage, model: model)
     end

@@ -46,8 +46,9 @@ end
 renewal_workflow = TurnKit::Skill.from_file(File.join(__dir__, "skills", "renewal_risk_review.md"))
 
 client = WorkflowClient.new
-workflow = TurnKit::Workflow.new(
+agent = TurnKit::Agent.new(
   name: "renewal_risk_review",
+  orchestrator: true,
   instructions: "Review renewal risk using CRM facts before making a recommendation.",
   skills: [renewal_workflow],
   tools: [AccountLookup],
@@ -57,18 +58,18 @@ workflow = TurnKit::Workflow.new(
   max_spend: 0.25
 )
 
-run = workflow.run(
+run = agent.run(
   "Review renewal risk for this account.",
   input: { account_id: "acct_123" }
 )
 
-puts "Use TurnKit::Workflow when a task becomes a reusable production capability."
+puts "Use an orchestrator TurnKit::Agent when a task becomes a reusable production capability."
 puts
-puts "workflow_name: #{workflow.name}"
+puts "agent_name: #{agent.name}"
 puts "run_id: #{run.id}"
 puts "status: #{run.status}"
-puts "output: #{run.output}"
-puts "steps: #{run.steps}"
-puts "tool_calls: #{run.tool_calls.map(&:tool_name).join(", ")}"
+puts "output: #{run.output_text}"
+puts "turns: #{run.turn_records.length}"
+puts "tool_executions: #{run.tool_executions.map(&:tool_name).join(", ")}"
 puts "model_calls: #{client.calls.length}"
 puts "has_workflow_skill: #{client.calls.first.fetch(:instructions).include?("renewal_risk_review") ? "yes" : "no"}"

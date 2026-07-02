@@ -10,7 +10,7 @@ the submit tool, Markdown renderer, and format audit.
 
 ## What it demonstrates
 
-- `TurnKit::Workflow` as a reusable task runner
+- an orchestrator `TurnKit::Agent` (`orchestrator: true`) as a reusable task runner
 - tool use before final output
 - per-tool budgets with `max_tool_executions_by_name`
 - a terminal submit tool that renders exact Markdown

@@ -2,3 +2,4 @@
 /pkg/
 *.gem
 /checksums/
+/Gemfile.lock

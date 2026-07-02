@@ -11,8 +11,7 @@ module TurnKit
       }.freeze
 
       def validate!(model:)
-        require "ruby_llm"
-
+        ensure_ruby_llm!
         raise ModelAccessError, "model is required" if model.to_s.empty?
 
         configure_from_environment
@@ -24,13 +23,12 @@ module TurnKit
         raise ModelAccessError, "#{key_name} is required for #{model}. Set ENV[#{key_name.inspect}] or configure RubyLLM before running TurnKit."
       end
 
-      def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, output_schema: nil, metadata: nil, on_event: nil)
-        require "ruby_llm"
-
+      def chat(model:, messages:, tools:, instructions:, dynamic_instructions: nil, temperature: nil, thinking: nil, output_schema: nil, metadata: nil, on_event: nil)
+        ensure_ruby_llm!
         configure_from_environment
 
         chat = ::RubyLLM.chat(model: model)
-        add_instructions(chat, instructions, model: model)
+        add_instructions(chat, instructions, dynamic_instructions, model: model)
         chat.with_temperature(temperature) if temperature
         apply_thinking(chat, thinking)
         chat.with_schema(normalize_schema(output_schema)) if output_schema
@@ -42,10 +40,10 @@ module TurnKit
       end
 
       def paint(prompt:, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: nil, on_event: nil)
-        require "ruby_llm"
-
+        ensure_ruby_llm!
         configure_from_environment
-        kwargs = paint_kwargs(
+        image = ::RubyLLM.paint(
+          prompt,
           model: model,
           provider: provider,
           assume_model_exists: assume_model_exists || false,
@@ -54,13 +52,11 @@ module TurnKit
           mask: mask,
           params: params || {}
         )
-        image = ::RubyLLM.paint(prompt, **kwargs)
         normalize_image_response(image, model: model, provider: provider, params: { "size" => size || "1024x1024" }.merge(params || {}), metadata: metadata)
       end
 
       def view_media(media:, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: nil, on_event: nil)
-        require "ruby_llm"
-
+        ensure_ruby_llm!
         configure_from_environment
         media_input = MediaInput.wrap(media)
         content = ::RubyLLM::Content.new(objective.to_s)
@@ -76,6 +72,12 @@ module TurnKit
       end
 
       private
+        def ensure_ruby_llm!
+          require "ruby_llm"
+        rescue LoadError
+          raise ConfigError, "TurnKit::Adapters::RubyLLM requires the ruby_llm gem (>= 1.16). Add `gem \"ruby_llm\"` to your Gemfile."
+        end
+
         def configure_from_environment
           config = ::RubyLLM.config
           config.openai_api_key ||= ENV["OPENAI_API_KEY"]
@@ -117,19 +119,17 @@ module TurnKit
           end
         end
 
+        # RubyLLM has no public API to request a completion without executing
+        # tool calls, so this depends on the private RubyLLM::Chat#provider_completion
+        # (added in ruby_llm 1.16). TurnKit must run tools itself (to persist
+        # executions and enforce budgets). Guarded by a canary test in the
+        # suite; revisit when RubyLLM exposes a public equivalent.
         def complete_without_tool_execution(chat)
-          provider = chat.instance_variable_get(:@provider)
-          provider.complete(
-            chat.messages,
-            tools: chat.tools,
-            tool_prefs: chat.tool_prefs,
-            temperature: chat.instance_variable_get(:@temperature),
-            model: chat.model,
-            params: chat.params,
-            headers: chat.headers,
-            schema: chat.schema,
-            thinking: chat.instance_variable_get(:@thinking)
-          )
+          unless chat.respond_to?(:provider_completion, true)
+            raise ConfigError, "TurnKit::Adapters::RubyLLM requires ruby_llm >= 1.16 (RubyLLM::Chat#provider_completion not found)"
+          end
+
+          chat.send(:provider_completion)
         end
 
         def add_message(chat, message)
@@ -145,15 +145,16 @@ module TurnKit
           )
         end
 
-        def add_instructions(chat, instructions, model:)
-          return if instructions.nil? || instructions.empty?
+        def add_instructions(chat, instructions, dynamic_instructions, model:)
+          stable = instructions.to_s
+          dynamic = dynamic_instructions.to_s
+          return if stable.empty? && dynamic.empty?
 
-          if prompt_cache_enabled? && anthropic_model?(model) && instructions.include?(SystemPrompt::CACHE_BOUNDARY)
-            stable, dynamic = SystemPrompt.split_cache_boundary(instructions)
+          if prompt_cache_enabled? && anthropic_model?(model) && !dynamic.empty?
             add_system_message(chat, stable, cache: true)
             add_system_message(chat, dynamic, cache: false)
           else
-            chat.with_instructions(instructions)
+            chat.with_instructions([ stable, dynamic ].reject(&:empty?).join("\n\n"))
           end
         end
 
@@ -189,8 +190,6 @@ module TurnKit
         end
 
         def ruby_llm_tool(tool)
-          require "ruby_llm"
-
           Class.new(::RubyLLM::Tool) do
             define_singleton_method(:name) { tool.tool_name }
             description tool.description
@@ -279,21 +278,6 @@ module TurnKit
           return unless response.respond_to?(:cost)
 
           response.cost&.total
-        end
-
-        def paint_kwargs(kwargs)
-          parameters = ::RubyLLM::Image.method(:paint).parameters
-          return kwargs if parameters.any? { |kind, _| kind == :keyrest }
-
-          accepted = parameters.filter_map { |kind, name| name if %i[key keyreq].include?(kind) }
-          unsupported = kwargs.keys.select { |key| !accepted.include?(key) && !blank?(kwargs[key]) }
-          raise ArgumentError, "RubyLLM image generation does not support: #{unsupported.join(", ")}" if unsupported.any?
-
-          kwargs.slice(*accepted)
-        end
-
-        def blank?(value)
-          value.nil? || value == false || (value.respond_to?(:empty?) && value.empty?)
         end
 
         def normalize_image_response(image, model:, provider:, params:, metadata:)

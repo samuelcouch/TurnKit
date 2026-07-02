@@ -43,7 +43,7 @@ module TurnKit
       @started_at = @record["started_at"]
       emit("turn.started", status: status, model: model)
       agent.effective_client.validate!(model: model)
-      @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: budget_limits)
+      @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: agent.budget_limits)
       revisions_used = 0
       loop do
         budget.check!(depth: depth)
@@ -113,7 +113,15 @@ module TurnKit
     end
 
     def policy_audit
-      (@record["options"] || {})["policy_audit"]
+      options = @record["options"] || {}
+      options.dig("state", "policy_audit") || options["policy_audit"]
+    end
+
+    # Reads iterations from options["state"], falling back to the legacy
+    # top-level key for turns persisted before the state split.
+    def self.iterations_for(record)
+      options = record["options"] || {}
+      (options.dig("state", "iterations") || options["iterations"]).to_i
     end
 
     def usage
@@ -168,23 +176,13 @@ module TurnKit
     end
 
     def paint(prompt, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: {}, client: nil)
-      claimed_standalone = false
-      case status
-      when "pending"
-        claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
-        raise Error, "turn is already running" unless claimed
-
+      claimed = claim_standalone!("paint")
+      if claimed
         @record = claimed
         @started_at = @record["started_at"]
-        @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: budget_limits)
-        claimed_standalone = true
         emit("turn.started", status: status, model: model)
-      when "running"
-        # Image tools call this while their parent turn is running.
-      else
-        raise Error, "cannot paint for #{status} turn"
+        @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: agent.budget_limits)
       end
-
       image_client = client || agent.effective_client
       request = {
         prompt: prompt,
@@ -201,43 +199,28 @@ module TurnKit
       image_client.validate!(model: model)
       emit("image.requested", request.except(:input_images, :mask))
       result = call_image_client(image_client, request)
-      result_cost = Cost.from_usage(result.usage, model: result.model || model)
-      add_usage!(result.usage, cost: result_cost)
-      budget.add_cost!(result_cost.total)
+      result_cost = apply_result_cost(result, model: model)
       image = result.images.first
       raise Error, "image client returned no image" unless image
       raise Error, "image client returned image without url or data" if image.url.to_s.empty? && image.data.to_s.empty?
 
       persist_image_message(image)
       emit("image.completed", image: image.to_h, model: image.model || model, provider: image.provider || provider&.to_s, mime_type: image.mime_type, usage: result.usage.to_h, cost: result_cost.to_h, metadata: metadata || {})
-      complete_with_output(image.url.to_s, output_data: { "type" => "image", "images" => [ image.to_h ] }, audit: check_policy(image.url.to_s, output_data: { "type" => "image", "images" => [ image.to_h ] })) if claimed_standalone
+      complete_with_output(image.url.to_s, output_data: { "type" => "image", "images" => [ image.to_h ] }, audit: check_policy(image.url.to_s, output_data: { "type" => "image", "images" => [ image.to_h ] })) if claimed
       image
     rescue StandardError => error
-      if claimed_standalone
-        update!(status: "failed", error: { "class" => error.class.name, "message" => error.message }, completed_at: Clock.now)
-        emit("turn.failed", error: { "class" => error.class.name, "message" => error.message })
-      end
+      fail_standalone!(error) if claimed
       raise
     end
 
     def view_media(media, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: {}, client: nil)
-      claimed_standalone = false
-      case status
-      when "pending"
-        claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
-        raise Error, "turn is already running" unless claimed
-
+      claimed = claim_standalone!("view media")
+      if claimed
         @record = claimed
         @started_at = @record["started_at"]
-        @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: budget_limits)
-        claimed_standalone = true
         emit("turn.started", status: status, model: model)
-      when "running"
-        # Media tools call this while their parent turn is running.
-      else
-        raise Error, "cannot view media for #{status} turn"
+        @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: agent.budget_limits)
       end
-
       media_input = MediaInput.wrap(media)
       media_client = client || agent.effective_client
       request = {
@@ -253,42 +236,38 @@ module TurnKit
       media_client.validate!(model: model)
       emit("media.requested", request.except(:media).merge(media: media_input.to_h))
       result = call_media_client(media_client, request)
-      result_cost = Cost.from_usage(result.usage, model: result.model || model)
-      add_usage!(result.usage, cost: result_cost)
-      budget.add_cost!(result_cost.total)
+      result_cost = apply_result_cost(result, model: model)
       analysis = result.media_analyses.first
       raise Error, "media client returned no media analysis" unless analysis
 
       persist_media_analysis_message(analysis)
       output_data = { "type" => "media_analysis", "media_analyses" => [ analysis.to_h ] }
       emit("media.completed", analysis: analysis.to_h, model: analysis.model || model, provider: analysis.provider || provider&.to_s, media: media_input.to_h, usage: result.usage.to_h, cost: result_cost.to_h, metadata: metadata || {})
-      complete_with_output(analysis.text, output_data: output_data, audit: check_policy(analysis.text, output_data: output_data)) if claimed_standalone
+      complete_with_output(analysis.text, output_data: output_data, audit: check_policy(analysis.text, output_data: output_data)) if claimed
       analysis
     rescue StandardError => error
-      emit("media.failed", error: { "class" => error.class.name, "message" => error.message }, metadata: metadata || {}) if status == "running" || claimed_standalone
-      if claimed_standalone
-        update!(status: "failed", error: { "class" => error.class.name, "message" => error.message }, completed_at: Clock.now)
-        emit("turn.failed", error: { "class" => error.class.name, "message" => error.message })
-      end
+      emit("media.failed", error: { "class" => error.class.name, "message" => error.message }, metadata: metadata || {}) if status == "running" || claimed
+      fail_standalone!(error) if claimed
       raise
     end
 
     private
       def model_request
         prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: prompt_mode || agent.effective_prompt_mode(turn: self))
-        instructions = case agent.system_prompt
+        instructions, dynamic_instructions = case agent.system_prompt
         when nil
-          prompt.to_s
+          [ prompt.stable, prompt.dynamic ]
         when String
-          agent.system_prompt
+          [ agent.system_prompt, nil ]
         else
-          agent.system_prompt.call(prompt).to_s
+          [ agent.system_prompt.call(prompt).to_s, nil ]
         end
         ModelRequest.new(
           model: model,
           messages: llm_messages,
           tools: agent.effective_tools,
           instructions: instructions,
+          dynamic_instructions: dynamic_instructions,
           thinking: thinking,
           output_schema: output_schema,
           metadata: { turn_id: id, conversation_id: conversation.id },
@@ -296,48 +275,27 @@ module TurnKit
         )
       end
 
+      # Clients implement the TurnKit::Client keyword contract. See client.rb.
       def call_client(request, client: agent.effective_client)
-        kwargs = {
+        client.chat(
           model: request.model,
           messages: request.messages,
           tools: request.tools,
           instructions: request.instructions,
+          dynamic_instructions: request.dynamic_instructions,
           thinking: request.thinking,
           output_schema: request.output_schema,
           metadata: request.metadata,
           on_event: ->(event) { emit_event(event) }
-        }
-        accepted = chat_keyword_names(client)
-        kwargs = kwargs.slice(*accepted) unless accepted.include?(:keyrest)
-        client.chat(**kwargs)
-      end
-
-      def chat_keyword_names(client)
-        client.method(:chat).parameters.filter_map do |kind, name|
-          return [ :keyrest ] if kind == :keyrest
-
-          name if %i[key keyreq].include?(kind)
-        end
+        )
       end
 
       def call_image_client(client, request)
-        kwargs = request.merge(on_event: ->(event) { emit_event(event) })
-        accepted = client.method(:paint).parameters.filter_map do |kind, name|
-          return client.paint(**kwargs) if kind == :keyrest
-
-          name if %i[key keyreq].include?(kind)
-        end
-        client.paint(**kwargs.slice(*accepted))
+        client.paint(**request, on_event: ->(event) { emit_event(event) })
       end
 
       def call_media_client(client, request)
-        kwargs = request.merge(on_event: ->(event) { emit_event(event) })
-        accepted = client.method(:view_media).parameters.filter_map do |kind, name|
-          return client.view_media(**kwargs) if kind == :keyrest
-
-          name if %i[key keyreq].include?(kind)
-        end
-        client.view_media(**kwargs.slice(*accepted))
+        client.view_media(**request, on_event: ->(event) { emit_event(event) })
       end
 
       def llm_messages
@@ -453,8 +411,7 @@ module TurnKit
       end
 
       def persist_policy_audit(audit)
-        options = (@record["options"] || {}).merge("policy_audit" => audit.to_h)
-        update!(options: options)
+        update_state!("policy_audit" => audit.to_h)
         emit("output_policy.completed", clean: audit.clean?, violation_count: audit.violations.length)
       end
 
@@ -506,23 +463,50 @@ module TurnKit
 
       def count_iteration!
         budget.count_iteration!
-        options = (@record["options"] || {}).merge("iterations" => (@record.dig("options", "iterations").to_i + 1))
-        update!(options: options)
+        update_state!("iterations" => Turn.iterations_for(@record) + 1)
+      end
+
+      # Runtime state lives under options["state"]; the rest of options is
+      # write-once turn configuration. Reads fall back to the legacy top-level
+      # keys for turns persisted before the split.
+      def update_state!(changes)
+        options = @record["options"] || {}
+        update!(options: options.merge("state" => (options["state"] || {}).merge(changes)))
       end
 
       def heartbeat!
         update!(heartbeat_at: Clock.now)
       end
 
-      def budget_limits
-        {
-          max_iterations: agent.max_iterations || TurnKit.max_iterations,
-          timeout: agent.timeout || TurnKit.timeout,
-          max_depth: agent.max_depth || TurnKit.max_depth,
-          max_tool_executions: agent.max_tool_executions || TurnKit.max_tool_executions,
-          max_tool_executions_by_name: agent.max_tool_executions_by_name || TurnKit.max_tool_executions_by_name,
-          max_spend: agent.max_spend || TurnKit.max_spend
-        }
+      # Claims a pending turn for a standalone media call. Returns the claimed
+      # record when this call owns turn completion, nil when running inside a parent
+      # turn (media tools call paint/view_media while their turn is running).
+      # Callers perform any post-claim setup after assignment, so later errors
+      # still fail the claimed turn.
+      def claim_standalone!(action)
+        case status
+        when "pending"
+          claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
+          raise Error, "turn is already running" unless claimed
+
+          claimed
+        when "running"
+          nil
+        else
+          raise Error, "cannot #{action} for #{status} turn"
+        end
+      end
+
+      def fail_standalone!(error)
+        update!(status: "failed", error: { "class" => error.class.name, "message" => error.message }, completed_at: Clock.now)
+        emit("turn.failed", error: { "class" => error.class.name, "message" => error.message })
+      end
+
+      def apply_result_cost(result, model:)
+        cost = Cost.from_usage(result.usage, model: result.model || model)
+        add_usage!(result.usage, cost: cost)
+        budget.add_cost!(cost.total)
+        cost
       end
 
       def aggregate_cost(current, cost)

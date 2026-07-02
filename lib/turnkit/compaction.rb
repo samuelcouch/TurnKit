@@ -3,19 +3,19 @@
 module TurnKit
   module Compaction
     DEFAULTS = {
-      "enabled" => true,
-      "threshold" => 0.75,
-      "context_limit" => 128_000,
-      "reserved_tokens" => 20_000,
-      "head_messages" => 0,
-      "tail_messages" => 12,
-      "tail_tokens" => 8_000,
-      "summary_ratio" => 0.20,
-      "min_summary_tokens" => 1_000,
-      "max_summary_tokens" => 12_000,
-      "tool_output_max_chars" => 2_000,
-      "model" => nil,
-      "client" => nil
+      enabled: true,
+      threshold: 0.75,
+      context_limit: 128_000,
+      reserved_tokens: 20_000,
+      head_messages: 0,
+      tail_messages: 12,
+      tail_tokens: 8_000,
+      summary_ratio: 0.20,
+      min_summary_tokens: 1_000,
+      max_summary_tokens: 12_000,
+      tool_output_max_chars: 2_000,
+      model: nil,
+      client: nil
     }.freeze
 
     KNOWN_KEYS = DEFAULTS.keys.freeze
@@ -92,7 +92,7 @@ module TurnKit
     module_function
 
     def enabled_for?(agent, overrides = {})
-      policy_for(agent, overrides)["enabled"]
+      policy_for(agent, overrides)[:enabled]
     end
 
     def policy_for(agent, overrides = {})
@@ -100,9 +100,9 @@ module TurnKit
       local = normalize_config(agent.compaction)
       override = normalize_config(overrides)
 
-      return DEFAULTS.merge("enabled" => false) if global == false
-      return DEFAULTS.merge("enabled" => false) if local == false
-      return DEFAULTS.merge("enabled" => false) if override == false
+      return DEFAULTS.merge(enabled: false) if global == false
+      return DEFAULTS.merge(enabled: false) if local == false
+      return DEFAULTS.merge(enabled: false) if override == false
 
       DEFAULTS.merge(global || {}).merge(local || {}).merge(override || {})
     end
@@ -112,7 +112,7 @@ module TurnKit
 
       force = turn.compact == true if force.nil?
       policy = policy_for(turn.agent)
-      return unless policy["enabled"]
+      return unless policy[:enabled]
 
       messages = project(turn.conversation.messages_for_turn(turn))
       return unless force || over_threshold?(messages, policy)
@@ -127,7 +127,7 @@ module TurnKit
 
     def compact!(conversation, agent:, turn: nil, focus: nil, auto: false, overrides: {}, force: true)
       policy = policy_for(agent, overrides)
-      raise CompactionError, "compaction is disabled" unless policy["enabled"]
+      raise CompactionError, "compaction is disabled" unless policy[:enabled]
 
       messages = turn ? conversation.messages_for_turn(turn) : conversation.messages
       projected = project(messages)
@@ -135,14 +135,14 @@ module TurnKit
       return nil if selected.nil? && auto
       raise CompactionError, "not enough messages to compact" unless selected
 
-      selected_tokens = estimate_messages_tokens(selected.fetch("middle"))
+      selected_tokens = estimate_messages_tokens(selected.fetch(:middle))
       return nil if auto && !force && !over_threshold?(projected, policy)
 
       summary = generate_summary(
         agent: agent,
         policy: policy,
-        messages: selected.fetch("middle"),
-        previous_summary: selected["previous_summary"]&.text,
+        messages: selected.fetch(:middle),
+        previous_summary: selected[:previous_summary]&.text,
         focus: focus,
         target_tokens: summary_budget(selected_tokens, policy),
         fallback_model: turn&.model || conversation.model || agent.effective_model,
@@ -209,25 +209,25 @@ module TurnKit
     end
 
     def summary_budget(input_tokens, policy)
-      budget = (input_tokens.to_i * policy["summary_ratio"].to_f).ceil
-      budget = [ budget, policy["min_summary_tokens"].to_i ].max
-      [ budget, policy["max_summary_tokens"].to_i ].min
+      budget = (input_tokens.to_i * policy[:summary_ratio].to_f).ceil
+      budget = [ budget, policy[:min_summary_tokens].to_i ].max
+      [ budget, policy[:max_summary_tokens].to_i ].min
     end
 
     def over_threshold?(messages, policy)
-      usable = [ policy["context_limit"].to_i - policy["reserved_tokens"].to_i, 1 ].max
-      estimate_messages_tokens(messages) >= (usable * policy["threshold"].to_f)
+      usable = [ policy[:context_limit].to_i - policy[:reserved_tokens].to_i, 1 ].max
+      estimate_messages_tokens(messages) >= (usable * policy[:threshold].to_f)
     end
 
     def select_messages(messages, policy)
       rows = Array(messages)
-      return nil if rows.length <= policy["head_messages"].to_i + 1
+      return nil if rows.length <= policy[:head_messages].to_i + 1
 
       previous_summary = rows.reverse.find(&:context_summary?)
       candidates = rows.reject(&:context_summary?)
-      return nil if candidates.length <= policy["head_messages"].to_i + 1
+      return nil if candidates.length <= policy[:head_messages].to_i + 1
 
-      head_count = policy["head_messages"].to_i
+      head_count = policy[:head_messages].to_i
       tail_start = tail_start_index(candidates, policy)
       tail_start = [ tail_start, head_count ].max
       tail_start = expand_tail_start_for_tool_pairs(candidates, tail_start)
@@ -242,11 +242,11 @@ module TurnKit
       end
 
       {
-        "middle" => middle,
-        "previous_summary" => previous_summary,
-        "replaces_from_sequence" => from_sequence,
-        "replaces_through_sequence" => through_sequence,
-        "tail_start_sequence" => candidates[tail_start]&.sequence
+        middle: middle,
+        previous_summary: previous_summary,
+        replaces_from_sequence: from_sequence,
+        replaces_through_sequence: through_sequence,
+        tail_start_sequence: candidates[tail_start]&.sequence
       }
     end
 
@@ -290,7 +290,7 @@ module TurnKit
       when false
         false
       when Hash
-        attrs = value.transform_keys(&:to_s)
+        attrs = value.transform_keys(&:to_sym)
         unknown = attrs.keys - KNOWN_KEYS
         raise ConfigError, "unknown compaction options: #{unknown.join(", ")}" if unknown.any?
 
@@ -323,8 +323,8 @@ module TurnKit
     end
 
     def tail_start_index(messages, policy)
-      max_messages = policy["tail_messages"].to_i
-      max_tokens = policy["tail_tokens"].to_i
+      max_messages = policy[:tail_messages].to_i
+      max_tokens = policy[:tail_tokens].to_i
       count = 0
       tokens = 0
       index = messages.length
@@ -357,8 +357,8 @@ module TurnKit
     end
 
     def generate_summary(agent:, policy:, messages:, previous_summary:, focus:, target_tokens:, fallback_model:, conversation_id:, turn_id:, turn: nil)
-      client = policy["client"] || agent.effective_client
-      model = policy["model"] || fallback_model
+      client = policy[:client] || agent.effective_client
+      model = policy[:model] || fallback_model
       safe_messages = messages.map { |message| sanitize_message(message, policy) }
       prompt = build_prompt(previous_summary: previous_summary, focus: focus, target_tokens: target_tokens)
       attrs = {
@@ -369,7 +369,7 @@ module TurnKit
         metadata: { compaction: true, conversation_id: conversation_id, turn_id: turn_id }
       }
       result = if turn
-        turn.internal_model_call(**attrs, purpose: "compaction", client: policy["client"])
+        turn.internal_model_call(**attrs, purpose: "compaction", client: policy[:client])
       else
         client.validate!(model: model)
         client.chat(**attrs)
@@ -383,7 +383,7 @@ module TurnKit
     def sanitize_message(message, policy)
       return message unless message.tool_result?
 
-      max = policy["tool_output_max_chars"].to_i
+      max = policy[:tool_output_max_chars].to_i
       return message if max <= 0 || message.text.length <= max
 
       attrs = message.to_h
@@ -392,7 +392,7 @@ module TurnKit
     end
 
     def append_summary(conversation, turn:, summary:, selected:, policy:, focus:, auto:, input_tokens:)
-      model = policy["model"] || turn&.model || conversation.model || conversation.agent.effective_model
+      model = policy[:model] || turn&.model || conversation.model || conversation.agent.effective_model
       conversation.append_message(
         role: "assistant",
         kind: "context_summary",
@@ -402,9 +402,9 @@ module TurnKit
           "compaction" => {
             "auto" => auto,
             "focus" => focus,
-            "replaces_from_sequence" => selected.fetch("replaces_from_sequence"),
-            "replaces_through_sequence" => selected.fetch("replaces_through_sequence"),
-            "tail_start_sequence" => selected["tail_start_sequence"],
+            "replaces_from_sequence" => selected.fetch(:replaces_from_sequence),
+            "replaces_through_sequence" => selected.fetch(:replaces_through_sequence),
+            "tail_start_sequence" => selected[:tail_start_sequence],
             "summary_model" => model,
             "input_tokens" => input_tokens,
             "summary_tokens" => estimate_text_tokens(summary),

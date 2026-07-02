@@ -11,16 +11,12 @@ module TurnKit
     def id = turn.id
     def root_turn_id = turn.root_turn_id
     def status = turn.status
-    def output = output_text
     def output_text = turn.output_text
     def output_data = turn.output_data
     def policy_audit = turn.policy_audit
     def policy_clean? = policy_audit.nil? || policy_audit.fetch("clean", false)
     def usage = Usage.from_records(turn_records)
     def cost = Cost.from_records(turn_records)
-    def steps = turn_records.length
-    def tool_calls = tool_executions
-    def persisted? = true
 
     def error
       turn.store.load_turn(id)["error"]

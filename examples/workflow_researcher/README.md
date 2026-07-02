@@ -12,7 +12,7 @@ conversation with normal TurnKit tool calls.
 
 It demonstrates:
 
-- `TurnKit::Workflow`
+- orchestrator `TurnKit::Agent` (`orchestrator: true`)
 - workflow skills as reusable orchestration patterns
 - tool instances with constructor-injected clients
 - `max_spend`, `max_iterations`, and `max_tool_executions` guardrails
@@ -74,8 +74,9 @@ source_grounded_brief = TurnKit::Skill.from_file(
   File.join(__dir__, "skills", "source_grounded_brief.md")
 )
 
-workflow = TurnKit::Workflow.new(
+agent = TurnKit::Agent.new(
   name: "source_brief_orchestrator",
+  orchestrator: true,
   skills: [source_grounded_brief],
   tools: WorkflowResearcher.web_tools,
   max_spend: 0.50,
@@ -89,12 +90,12 @@ workflow = TurnKit::Workflow.new(
   compaction: { context_limit: 64_000, threshold: 0.75 }
 )
 
-run = workflow.run(
+run = agent.run(
   "Create a source-grounded brief for the request.",
   input: { request: request }
 )
 
-puts run.output
+puts run.output_text
 ```
 
 The model stays in one conversation and uses the regular TurnKit loop:
@@ -107,13 +108,14 @@ model → web_search → result → read_web_pages → result → final
 
 The web tools are plain Ruby objects. They build their client from
 `PARALLEL_API_KEY` by default, and can also receive an injected client for tests
-or custom configuration:
+or custom configuration. The Parallel HTTP client itself is shared by the web
+examples; this example owns only its workflow-specific tools:
 
 ```ruby
 tools = WorkflowResearcher.web_tools
 
 # or
-client = WorkflowResearcher::ParallelClient.new(api_key: "...")
+client = TurnKitExamples::ParallelClient.new(api_key: "...")
 tools = WorkflowResearcher.web_tools(parallel_client: client)
 ```
 

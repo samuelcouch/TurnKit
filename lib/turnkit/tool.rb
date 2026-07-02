@@ -25,6 +25,7 @@ module TurnKit
         name = name.to_s
         raise ArgumentError, "unknown parameter type: #{type}" unless TYPES.include?(type)
         raise ArgumentError, "invalid parameter name: #{name}" unless NAME_PATTERN.match?(name)
+        raise ArgumentError, "context is a reserved parameter name" if name == "context"
         raise ArgumentError, "duplicate parameter: #{name}" if parameters.any? { |param| param.fetch(:name) == name }
         raise ArgumentError, "enum values are required for enum parameter: #{name}" if type == :enum && Array(enum).empty?
 
@@ -113,23 +114,15 @@ module TurnKit
       end
 
       def call(arguments = {}, context:)
-        instance = begin
-          new
-        rescue ArgumentError => error
-          raise if error.message !~ /wrong number of arguments|missing keyword/
+        required = instance_method(:initialize).parameters.any? { |kind, _| %i[req keyreq].include?(kind) }
+        raise ToolError, "#{tool_name} requires constructor arguments; register an instance instead" if required
 
-          raise ToolError, "#{tool_name} requires constructor arguments; register an instance instead"
-        end
-        invoke(instance, arguments, context: context)
+        invoke(new, arguments, context: context)
       end
 
       def invoke(instance, arguments = {}, context:)
         keyword_arguments = symbolize(validate_arguments(arguments))
-        if accepts_turnkit_context?(instance)
-          instance.call(**keyword_arguments, turnkit_context: context)
-        else
-          instance.call(**keyword_arguments, context: context)
-        end
+        instance.call(**keyword_arguments, context: context)
       end
 
       private
@@ -170,10 +163,6 @@ module TurnKit
 
         def validate_value!(value, param)
           SchemaCheck.validate!(value, schema_for(param), error_class: ToolValidationError, label: param.fetch(:name))
-        end
-
-        def accepts_turnkit_context?(instance)
-          instance.method(:call).parameters.any? { |kind, name| %i[key keyreq].include?(kind) && name == :turnkit_context }
         end
 
         def symbolize(hash)

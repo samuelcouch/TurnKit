@@ -6,3 +6,4 @@ gemspec
 
 gem "minitest"
 gem "rake"
+gem "ruby_llm", "~> 1.16"

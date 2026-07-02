@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.2 - 2026-07-02
+
+### Breaking
+
+- Remove `TurnKit::Workflow`; use `TurnKit::Agent.new(orchestrator: true, ...)` for reusable autonomous task runners.
+- Make `Agent#run` task positional, remove `TurnKit.model` aliases, and rename run accessors to `output_text` and `tool_executions`.
+- Simplify tool context injection to `context:`, reserve `context` as a tool parameter name, and reduce `SubAgentTool` input to `task`.
+- Replace prompt contributor APIs with per-agent `system_prompt:` customization and stable/dynamic `TurnKit::SystemPrompt` accessors.
+- Strictly validate custom cost-rate keys, remove `MediaAnalysisResult#structured?`, remove Rails record-class globals, and require atomic custom store `claim_turn` implementations.
+- Remove `ruby_llm` as a runtime dependency; add `gem "ruby_llm", "~> 1.16"` when using the default RubyLLM adapter.
+- Call custom clients with the full `TurnKit::Client` keyword contracts, including `dynamic_instructions:` for split stable/dynamic prompts.
+
+### Changed
+
+- Keep the Rails install generator under the conventional `lib/generators` path without a Railtie.
+- Document compaction config with symbol keys while continuing to accept string keys.
+- Persist turn runtime state under `options["state"]` with backward-compatible reads.
+
 ## 0.4.1 - 2026-06-19
 
 - Add first-class media analysis with `Turn#view_media`, `TurnKit.view_media`, and `TurnKit::ViewMediaTool`.

@@ -22,9 +22,12 @@ module TurnKit
 
       def validate!(model:)
         raise ModelAccessError, "codex command is required" if command.empty?
-        raise ModelAccessError, "#{command.inspect} was not found. Install OpenAI Codex CLI and run `codex login --device-auth`." unless executable?(command)
 
-        stdout, stderr, status = @runner.call([ command, "login", "status" ], stdin_data: nil, chdir: working_directory)
+        begin
+          stdout, stderr, status = @runner.call([ command, "login", "status" ], stdin_data: nil, chdir: working_directory)
+        rescue Errno::ENOENT
+          raise ModelAccessError, "#{command.inspect} was not found. Install OpenAI Codex CLI and run `codex login --device-auth`."
+        end
         return true if status.success?
 
         message = [ stderr, stdout ].join("\n").strip
@@ -32,12 +35,13 @@ module TurnKit
         raise ModelAccessError, [ "Codex is not authenticated.", message, hint ].reject(&:empty?).join(" ")
       end
 
-      def chat(model:, messages:, tools:, instructions:, temperature: nil, thinking: nil, output_schema: nil, metadata: nil, on_event: nil)
+      def chat(model:, messages:, tools:, instructions:, dynamic_instructions: nil, temperature: nil, thinking: nil, output_schema: nil, metadata: nil, on_event: nil)
         raise ToolError, "TurnKit tools are not supported by the Codex adapter; Codex uses its own local tools" if Array(tools).any?
 
+        full_instructions = [ instructions.to_s, dynamic_instructions.to_s ].reject(&:empty?).join("\n\n")
         with_tempfiles(output_schema: output_schema) do |schema_file, output_file|
           command = exec_command(model: model, schema_file: schema_file&.path, output_file: output_file.path)
-          stdout, stderr, status = @runner.call(command, stdin_data: prompt_for(messages: messages, instructions: instructions), chdir: working_directory)
+          stdout, stderr, status = @runner.call(command, stdin_data: prompt_for(messages: messages, instructions: full_instructions), chdir: working_directory)
           emit_codex_events(stdout, on_event: on_event)
           raise ModelAccessError, stderr.strip.empty? ? "codex exec failed" : stderr.strip unless status.success?
 
@@ -142,13 +146,6 @@ module TurnKit
           rescue JSON::ParserError
             nil
           end
-        end
-
-        def executable?(name)
-          return true if @runner != method(:run_command)
-          return File.executable?(name) if name.include?(File::SEPARATOR)
-
-          ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).any? { |path| File.executable?(File.join(path, name)) }
         end
 
         def run_command(command, stdin_data:, chdir:)
