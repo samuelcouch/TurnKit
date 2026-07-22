@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 - 2026-07-22
+
+### Breaking
+
+- Custom stores: `find_stale_turns` is replaced by `reconcile_stale_turns(before:)`, which must atomically transition eligible turns to `stale` and return the reconciled records. `update_tool_execution` is replaced by `claim_tool_execution(id, from:, to:, **attributes)`, an atomic compare-and-set mirroring `claim_turn`.
+
+### Fixed
+
+- Make stale-turn reconciliation atomic, so `TurnKit.reconcile_stale!` can no longer overwrite a turn that was concurrently claimed, heartbeated, or completed (#1).
+- Heartbeat while a tool executes, so tools slower than `TurnKit.timeout` are not falsely reconciled.
+
+### Added
+
+- Add an `interrupted` tool-execution status. Reconciliation marks a stale turn's unfinished tool executions `interrupted`, appends a synthetic error tool result for unresolved tool calls (keeping the transcript continuable), and emits `turn.stale` and `tool_call.interrupted` events. Late tool results arriving after interruption are dropped, never overwriting the reconciled state.
+- `TurnKit.reconcile_stale!` returns the reconciled turn records. `stale` is provisional: a worker whose heartbeats were merely late finishes its turn normally, replacing `stale` with the actual outcome.
+
 ## 0.4.2 - 2026-07-02
 
 ### Breaking
