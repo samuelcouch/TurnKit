@@ -33,6 +33,7 @@ require_relative "turnkit/prompt_context"
 require_relative "turnkit/system_prompt"
 require_relative "turnkit/store"
 require_relative "turnkit/memory_store"
+require_relative "turnkit/reconciliation"
 require_relative "turnkit/compaction"
 require_relative "turnkit/tool"
 require_relative "turnkit/image_tool"
@@ -89,9 +90,7 @@ module TurnKit
   end
 
   def self.reconcile_stale!(before: Clock.now - (timeout || 300))
-    store.find_stale_turns(before: before).each do |turn|
-      store.update_turn(turn.fetch("id"), "status" => "stale", "completed_at" => Clock.now)
-    end
+    Reconciliation.reconcile!(before: before)
   end
 
   def self.check_output_policy(output, constraints: [], context: {})

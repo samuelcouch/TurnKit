@@ -144,18 +144,28 @@ module TurnKit
       tool_execution_hash(tool_execution_class.find_by!(uid: id))
     end
 
-    def update_tool_execution(id, attributes)
-      record = tool_execution_class.find_by!(uid: id)
-      record.update!(Record.tool_execution_update(attributes))
-      tool_execution_hash(record)
+    def claim_tool_execution(id, from: "running", to: "completed", **attributes)
+      attrs = Record.tool_execution_update(attributes.merge(status: to))
+      affected = tool_execution_class.where(uid: id, status: from).update_all(attrs.merge(updated_at: Clock.now))
+      return nil if affected.zero?
+
+      load_tool_execution(id)
     end
 
     def list_tool_executions(turn_id:)
       tool_execution_class.where(turn_uid: turn_id).order(:created_at, :uid).map { |record| tool_execution_hash(record) }
     end
 
-    def find_stale_turns(before:)
-      turn_class.where(status: %w[pending running]).where("COALESCE(heartbeat_at, started_at, created_at) < ?", before).map { |record| turn_hash(record) }
+    def reconcile_stale_turns(before:)
+      scope = turn_class.where(status: %w[pending running]).where("COALESCE(heartbeat_at, started_at, created_at) < ?", before)
+      scope.filter_map do |record|
+        now = Clock.now
+        affected = turn_class
+          .where(id: record.id, status: %w[pending running])
+          .where("COALESCE(heartbeat_at, started_at, created_at) < ?", before)
+          .update_all(status: "stale", completed_at: now, updated_at: now)
+        turn_hash(record.reload) if affected == 1
+      end
     end
 
     private

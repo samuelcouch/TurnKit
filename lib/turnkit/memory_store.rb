@@ -100,10 +100,12 @@ module TurnKit
       @mutex.synchronize { duplicate(@tool_executions.fetch(id)) }
     end
 
-    def update_tool_execution(id, attributes)
-      attrs = Record.tool_execution_update(attributes)
+    def claim_tool_execution(id, from: "running", to: "completed", **attributes)
+      attrs = Record.tool_execution_update(attributes.merge(status: to))
       @mutex.synchronize do
         record = @tool_executions.fetch(id)
+        return nil unless record["status"] == from
+
         record.merge!(attrs.merge("updated_at" => Clock.now))
         duplicate(record)
       end
@@ -118,11 +120,14 @@ module TurnKit
       end
     end
 
-    def find_stale_turns(before:)
+    def reconcile_stale_turns(before:)
       @mutex.synchronize do
-        @turns.values.select do |turn|
-          %w[pending running].include?(turn["status"]) && stale_anchor(turn) && stale_anchor(turn) < before
-        end.map { |turn| duplicate(turn) }
+        @turns.values.filter_map do |turn|
+          next unless %w[pending running].include?(turn["status"]) && stale_anchor(turn) && stale_anchor(turn) < before
+
+          turn.merge!("status" => "stale", "completed_at" => Clock.now, "updated_at" => Clock.now)
+          duplicate(turn)
+        end
       end
     end
 

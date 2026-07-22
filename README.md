@@ -784,11 +784,25 @@ TurnKit.store = TurnKit::ActiveRecordStore.new(
 )
 ```
 
-Reconcile stale turns:
+Reconcile turns abandoned by a dead worker (for example after a hard-killed
+process). Run this periodically:
 
 ```ruby
 TurnKit.reconcile_stale!
 ```
+
+Reconciliation atomically marks pending and running turns whose last heartbeat
+is older than `TurnKit.timeout` as `stale`, so it never overwrites a turn that
+was concurrently claimed, heartbeated, or completed. Each stale turn's
+unfinished tool executions become `interrupted`, and a synthetic error tool
+result is appended for any unresolved tool call so the conversation can be
+continued. TurnKit never reruns an interrupted tool — whether its side effect
+happened is unknown, so the continued model is told not to assume either way.
+
+Reconciliation does not cancel or reassign the underlying process. If the
+original worker is still alive (its heartbeats were merely late), it continues
+over the synthetic interrupted result and later replaces `stale` with its
+actual `completed` or `failed` outcome — treat `turn.stale` as provisional.
 
 ## Options
 

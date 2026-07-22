@@ -3,7 +3,7 @@
 module TurnKit
   module Record
     TURN_STATUSES = %w[pending running completed failed cancelled stale].freeze
-    TOOL_EXECUTION_STATUSES = %w[pending running completed failed cancelled].freeze
+    TOOL_EXECUTION_STATUSES = %w[pending running completed failed cancelled interrupted].freeze
 
     TURN_UPDATE_KEYS = %w[status options usage cost error output_text output_data started_at heartbeat_at completed_at].freeze
     TOOL_EXECUTION_UPDATE_KEYS = %w[status result error started_at completed_at].freeze

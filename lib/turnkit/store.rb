@@ -20,9 +20,20 @@ module TurnKit
 
     def create_tool_execution(_attributes) = raise(NotImplementedError)
     def load_tool_execution(_id) = raise(NotImplementedError)
-    def update_tool_execution(_id, _attributes) = raise(NotImplementedError)
+    # claim_tool_execution mirrors claim_turn: an atomic compare-and-set on
+    # status, so a tool result recorded by a live worker and a reconciler
+    # marking the execution interrupted cannot overwrite each other.
+    def claim_tool_execution(_id, from: "running", to: "completed", **_attributes) = raise(NotImplementedError)
     def list_tool_executions(turn_id:) = raise(NotImplementedError)
 
-    def find_stale_turns(before:) = []
+    # reconcile_stale_turns is the other concurrency-safety point: it must
+    # atomically transition each pending/running turn whose stale anchor
+    # (heartbeat_at, else started_at, else created_at) is older than `before`
+    # to `stale`, rechecking both predicates at write time so a concurrently
+    # claimed, heartbeated, or completed turn is never overwritten. Returns
+    # the reconciled turn records. Descendant turns of a dead process stop
+    # heartbeating too and are reconciled by the same predicate, so no
+    # explicit subtree cascade is needed.
+    def reconcile_stale_turns(before:) = []
   end
 end

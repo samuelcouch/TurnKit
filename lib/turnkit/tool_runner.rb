@@ -71,7 +71,9 @@ module TurnKit
 
       def finish_success(execution, tool_call, payload)
         json = payload.to_json
-        attrs = turn.store.update_tool_execution(execution.id, "status" => "completed", "result" => payload, "completed_at" => Clock.now)
+        attrs = turn.store.claim_tool_execution(execution.id, from: "running", to: "completed", result: payload, completed_at: Clock.now)
+        return superseded_execution(execution) unless attrs
+
         append_result(execution, tool_call, payload, json: json, error: false)
         heartbeat!
         turn.emit("tool_call.completed", id: tool_call.id, name: tool_call.name, result_chars: json.length)
@@ -81,11 +83,19 @@ module TurnKit
       def finish_error(execution, tool_call, message, details: nil)
         error = { "message" => message.to_s, "details" => details }.compact
         json = error.to_json
-        attrs = turn.store.update_tool_execution(execution.id, "status" => "failed", "error" => error, "completed_at" => Clock.now)
+        attrs = turn.store.claim_tool_execution(execution.id, from: "running", to: "failed", error: error, completed_at: Clock.now)
+        return superseded_execution(execution) unless attrs
+
         append_result(execution, tool_call, error, json: json, error: true)
         heartbeat!
         turn.emit("tool_call.failed", id: tool_call.id, name: tool_call.name, error: error, result_chars: json.length)
         ToolExecution.new(attrs)
+      end
+
+      # The execution was reconciled (interrupted) while the tool ran; a
+      # synthetic result message already exists, so the late result is dropped.
+      def superseded_execution(execution)
+        ToolExecution.new(turn.store.load_tool_execution(execution.id))
       end
 
       def append_result(execution, tool_call, payload, json: payload.to_json, error: false)
@@ -104,7 +114,9 @@ module TurnKit
         calls.each do |call|
           payload = { "skipped" => true, "message" => "not executed: turn ended by #{terminal.name}" }
           execution = ToolExecution.new(create_execution(call))
-          attrs = turn.store.update_tool_execution(execution.id, "status" => "cancelled", "result" => payload, "completed_at" => Clock.now)
+          attrs = turn.store.claim_tool_execution(execution.id, from: "running", to: "cancelled", result: payload, completed_at: Clock.now)
+          next unless attrs
+
           append_result(ToolExecution.new(attrs), call, payload)
           turn.emit("tool_call.skipped", id: call.id, name: call.name)
         end
@@ -118,12 +130,24 @@ module TurnKit
         turn.agent.effective_tools.find { |tool| tool.tool_name == name.to_s }
       end
 
+      # Heartbeats while the tool runs so a tool slower than TurnKit.timeout
+      # keeps its turn's stale anchor fresh and is not falsely reconciled.
       def call_tool(tool, arguments, context:)
+        interval = (TurnKit.timeout || 300) / 3.0
+        heartbeat = Thread.new do
+          loop do
+            sleep interval
+            heartbeat!
+          end
+        end
+
         if tool.is_a?(Class)
           tool.call(arguments, context: context)
         else
           tool.class.invoke(tool, arguments, context: context)
         end
+      ensure
+        heartbeat.kill
       end
 
       def normalize_payload(value)
