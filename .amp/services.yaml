@@ -1,0 +1,8 @@
+services:
+  turnkit-postgres:
+    command: >-
+      sudo -u postgres /usr/lib/postgresql/15/bin/postgres
+      -D /var/lib/postgresql/15/main
+      -c config_file=/etc/postgresql/15/main/postgresql.conf
+      -c fsync=off -c synchronous_commit=off
+    port: 5432

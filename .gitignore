@@ -3,3 +3,4 @@
 *.gem
 /checksums/
 /Gemfile.lock
+/.amp/portals/
