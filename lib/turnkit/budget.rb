@@ -30,9 +30,9 @@ module TurnKit
     def seed!(turns:, tool_executions:)
       @mutex.synchronize do
         @iterations = Array(turns).sum { |turn| Turn.iterations_for(turn) }
-        completed = Array(tool_executions).select { |execution| %w[completed failed].include?(execution["status"]) && !execution.dig("error", "details", "budget_denied") }
-        @tool_executions = completed.length
-        completed.each { |execution| @tool_executions_by_name[execution.fetch("tool_name").to_s] += 1 }
+        reserved = Array(tool_executions).reject { |execution| execution["status"] == "cancelled" || execution.dig("error", "details", "budget_denied") }
+        @tool_executions = reserved.length
+        reserved.each { |execution| @tool_executions_by_name[execution.fetch("tool_name").to_s] += 1 }
         @cost = Array(turns).sum { |turn| turn["cost"].to_f }
       end
       self
@@ -74,6 +74,7 @@ module TurnKit
     def check!(depth:)
       raise BudgetError, "maximum sub-agent depth reached" if max_depth && depth > max_depth
       raise BudgetError, "turn timed out" if timeout && Clock.now >= root_started_at + timeout
+      raise BudgetError, "cost limit reached" if max_spend && @cost > max_spend
     end
 
     private

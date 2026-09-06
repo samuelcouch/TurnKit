@@ -2,10 +2,11 @@
 
 module TurnKit
   module Record
-    TURN_STATUSES = %w[pending running completed failed cancelled stale].freeze
+    TURN_STATUSES = %w[pending waiting running completed failed cancelled stale].freeze
     TOOL_EXECUTION_STATUSES = %w[pending running completed failed cancelled interrupted].freeze
 
-    TURN_UPDATE_KEYS = %w[status options usage cost error output_text output_data started_at heartbeat_at completed_at].freeze
+    TURN_UPDATE_KEYS = %w[status options usage cost error output_text output_data submitted_at claim_token started_at heartbeat_at completed_at].freeze
+    DELIVERY_UPDATE_KEYS = %w[message_id delivered_at].freeze
     TOOL_EXECUTION_UPDATE_KEYS = %w[status result error started_at completed_at].freeze
 
     module_function
@@ -13,11 +14,12 @@ module TurnKit
     def conversation(attributes)
       attrs = stringify(attributes)
       now = Clock.now
+      subject_type, subject_id = subject_pair(attrs["subject"])
       {
         "id" => attrs["id"] || Id.generate(:conversation),
         "agent_name" => attrs["agent_name"],
         "model" => attrs["model"],
-        "subject" => attrs["subject"],
+        "subject" => attrs["subject"] && { "type" => subject_type, "id" => subject_id }.compact,
         "metadata" => attrs["metadata"] || {},
         "created_at" => attrs["created_at"] || now,
         "updated_at" => attrs["updated_at"] || now
@@ -50,12 +52,43 @@ module TurnKit
         "error" => attrs["error"],
         "output_text" => attrs["output_text"],
         "output_data" => attrs["output_data"],
+        "submitted_at" => attrs["submitted_at"],
+        "claim_token" => attrs["claim_token"],
         "started_at" => attrs["started_at"],
         "heartbeat_at" => attrs["heartbeat_at"],
         "completed_at" => attrs["completed_at"],
         "created_at" => attrs["created_at"] || now,
         "updated_at" => attrs["updated_at"] || now
       }
+    end
+
+    def delivery(attributes)
+      attrs = stringify(attributes)
+      {
+        "id" => attrs["id"] || Id.generate(:delivery),
+        "source_conversation_id" => attrs.fetch("source_conversation_id"),
+        "destination_conversation_id" => attrs.fetch("destination_conversation_id"),
+        "source_turn_id" => attrs["source_turn_id"],
+        "key" => attrs.fetch("key"),
+        "payload" => JSON.parse(JSON.generate(attrs["payload"] || {})),
+        "message_id" => attrs["message_id"],
+        "delivered_at" => attrs["delivered_at"],
+        "created_at" => attrs["created_at"] || Clock.now
+      }
+    end
+
+    def assert_delivery_retry!(existing, requested)
+      keys = %w[source_conversation_id destination_conversation_id source_turn_id payload]
+      unless existing.slice(*keys) == requested.slice(*keys)
+        raise ToolError, "delivery key is already used for a different message"
+      end
+    end
+
+    def delivery_update(attributes)
+      attrs = stringify(attributes)
+      unknown = attrs.keys - DELIVERY_UPDATE_KEYS
+      raise ArgumentError, "unknown delivery update attributes: #{unknown.join(", ")}" if unknown.any?
+      attrs
     end
 
     def tool_execution(attributes)

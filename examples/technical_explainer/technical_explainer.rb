@@ -4,6 +4,7 @@ $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 
 require "turnkit"
 require_relative "../shared/parallel_client"
+require_relative "../shared/model_registry"
 require_relative "lib/models"
 require_relative "lib/prompt_files"
 require_relative "lib/store"
@@ -25,18 +26,18 @@ TechnicalExplainer.store = TechnicalExplainer::Store.new
 TechnicalExplainer.parallel_client = TurnKitExamples::ParallelClient.new
 
 TurnKit.default_model = ENV["TURNKIT_MODEL"] || if !ENV.fetch("ANTHROPIC_API_KEY", "").empty?
-  TurnKit.default_model
-elsif !ENV.fetch("GOOGLE_API_KEY", "").empty?
-  "gemini-2.5-flash"
-elsif !ENV.fetch("OPENAI_API_KEY", "").empty?
-  "gpt-4.1-mini"
+  "claude-sonnet-5"
+elsif !ENV.fetch("GEMINI_API_KEY", "").empty?
+  "gemini-3.8-flash"
 else
-  TurnKit.default_model
+  "gpt-5.6-sol"
 end
+TurnKitExamples.prepare_model(TurnKit.default_model)
 
 thinking = {}
 thinking[:effort] = ENV["TURNKIT_THINKING_EFFORT"] unless ENV.fetch("TURNKIT_THINKING_EFFORT", "").empty?
 thinking[:budget] = Integer(ENV["TURNKIT_THINKING_BUDGET"]) unless ENV.fetch("TURNKIT_THINKING_BUDGET", "").empty?
+thinking[:effort] = "none" if thinking.empty? && TurnKit.default_model == "gpt-5.6-sol"
 thinking = nil if thinking.empty?
 
 TurnKit.context_contributors << ->(_context) {

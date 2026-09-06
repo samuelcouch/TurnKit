@@ -54,6 +54,17 @@ module TurnKit
         @ends_turn || false
       end
 
+      # :unknown is the safe default for external effects. :replay_safe means
+      # the application/tool honors ToolContext#idempotency_key on retries.
+      def recovery(value = nil)
+        if value
+          value = value.to_sym
+          raise ArgumentError, "recovery must be :unknown or :replay_safe" unless %i[unknown replay_safe].include?(value)
+          @recovery = value
+        end
+        @recovery || (superclass.respond_to?(:recovery) ? superclass.recovery : :unknown)
+      end
+
       def completion_message(result)
         case @completion_message
         when nil

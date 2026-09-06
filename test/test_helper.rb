@@ -27,6 +27,8 @@ class Minitest::Test
     TurnKit.prompt_data_max_chars = 20_000
     TurnKit.available_skills = []
     TurnKit.context_contributors = []
+    TurnKit.authorization_policy = nil
+    TurnKit.maintenance_batch_size = 100
     TurnKit.output_policy_model = nil
     TurnKit.output_policy_thinking = { effort: :low }
   end

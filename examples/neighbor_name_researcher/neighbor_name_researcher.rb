@@ -6,10 +6,11 @@ require "json"
 require "time"
 require "turnkit"
 require_relative "../shared/parallel_client"
+require_relative "../shared/model_registry"
 
 module NeighborNameResearcher
   DEFAULT_REQUEST = "I live in Bryn Mawr, PA. My neighbors are Billy/William and his wife is Kelly/Kelli/Kelley. Kelly/Kelli/Kelley is a medical professional, likely at Bryn Mawr Hospital or in the Main Line Health network. Billy/William works in sales and has also coached hockey. Their daughter Grace was born around a year ago. Help me remember their last name for wedding invitations."
-  DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5.5")
+  DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5.6-sol")
   DEFAULT_DEEP_PROCESSOR = ENV.fetch("PARALLEL_DEEP_PROCESSOR", "ultra")
 
   module Schemas
@@ -300,6 +301,7 @@ end
 
 TurnKit.configure do |config|
   config.default_model = NeighborNameResearcher::DEFAULT_MODEL
+  TurnKitExamples.prepare_model(config.default_model)
   config.store = TurnKit::MemoryStore.new
   config.compaction = {
     context_limit: Integer(ENV.fetch("TURNKIT_CONTEXT_LIMIT", "64000")),
@@ -335,6 +337,7 @@ agent = TurnKit::Agent.new(
   orchestrator: true,
   description: "Uses deep web research to recover a likely neighbor family last name with privacy-minimized output.",
   model: TurnKit.default_model,
+  thinking: ({ effort: "none" } if TurnKit.default_model == "gpt-5.6-sol"),
   skills: [privacy_skill],
   tools: NeighborNameResearcher.tools(request: request, parallel_client: parallel_client),
   max_spend: Float(ENV.fetch("TURNKIT_MAX_SPEND", "1.00")),

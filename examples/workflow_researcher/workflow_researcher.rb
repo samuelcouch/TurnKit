@@ -5,6 +5,7 @@ $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 require "json"
 require "turnkit"
 require_relative "../shared/parallel_client"
+require_relative "../shared/model_registry"
 
 module WorkflowResearcher
   def self.web_tools(parallel_client: TurnKitExamples::ParallelClient.new)
@@ -72,7 +73,7 @@ module WorkflowResearcher
 end
 
 TurnKit.configure do |config|
-  config.default_model = ENV.fetch("TURNKIT_MODEL", "gpt-5.2")
+  config.default_model = ENV.fetch("TURNKIT_MODEL", "gpt-5.6-sol")
   config.store = TurnKit::MemoryStore.new
   config.compaction = {
     context_limit: Integer(ENV.fetch("TURNKIT_CONTEXT_LIMIT", "64000")),
@@ -97,6 +98,7 @@ TurnKit.on_event = ->(event) do
 end
 
 model = TurnKit.default_model
+TurnKitExamples.prepare_model(model)
 request = ARGV.join(" ").strip
 request = "Create a source-grounded brief on Rails 8 Solid Queue for a Rails founder." if request.empty?
 
@@ -107,6 +109,7 @@ agent = TurnKit::Agent.new(
   orchestrator: true,
   description: "Creates source-grounded briefs with web research and verification.",
   model: model,
+  thinking: ({ effort: "none" } if model == "gpt-5.6-sol"),
   skills: [source_grounded_brief],
   tools: WorkflowResearcher.web_tools,
   max_spend: Float(ENV.fetch("TURNKIT_MAX_SPEND", "0.50")),

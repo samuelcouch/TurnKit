@@ -6,10 +6,11 @@ require "json"
 require "time"
 require "turnkit"
 require_relative "../shared/parallel_client"
+require_relative "../shared/model_registry"
 
 module BayAlarmLeadResearcher
   DEFAULT_REQUEST = "Find 12 independent auto repair shops in Southern California for Bay Alarm commercial security outreach. Target owners, general managers, or operations managers."
-  DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5.5")
+  DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5.6-sol")
   DEFAULT_REGION = "Southern California"
   DEFAULT_PROCESSOR = ENV.fetch("PARALLEL_TASK_PROCESSOR", "pro")
   DEFAULT_DEEP_PROCESSOR = ENV.fetch("PARALLEL_DEEP_PROCESSOR", "ultra")
@@ -92,7 +93,7 @@ module BayAlarmLeadResearcher
         },
         domain: {
           type: "string",
-          description: "The normalized website domain for Apollo/Hunter lookup: no protocol, no path, no www., no @ symbol. If unavailable, return an empty string."
+          description: "The normalized website domain: no protocol, no path, no www., no @ symbol. If unavailable, return an empty string."
         },
         primary_location: {
           type: "string",
@@ -114,11 +115,7 @@ module BayAlarmLeadResearcher
         likely_decision_maker_titles: {
           type: "array",
           items: { type: "string" },
-          description: "Titles to search for at this account. Include Apollo-friendly buyer titles such as owner, president, CEO, general manager, operations manager, facilities manager, security manager, fleet manager, yard manager, controller, or CFO."
-        },
-        apollo_search_notes: {
-          type: "string",
-          description: "One concise note describing the best Apollo People Search inputs for this account: domain, relevant seniorities, and title keywords."
+          description: "Titles to search for at this account, such as owner, president, CEO, general manager, operations manager, facilities manager, security manager, fleet manager, yard manager, controller, or CFO."
         },
         bay_alarm_fit_score: {
           type: "integer",
@@ -153,7 +150,6 @@ module BayAlarmLeadResearcher
               company_domain: { type: "string", description: "Associated company domain without protocol, path, www., or @ symbol. Return an empty string if unavailable." },
               contact_type: { type: "string", enum: ["named_decision_maker", "named_influencer", "generic_routing_inbox", "unknown"], description: "Classify whether this is a real person likely to influence a physical-security purchase or only a generic routing contact. Prefer named_decision_maker contacts." },
               purchase_role: { type: "string", description: "How this person likely participates in a Bay Alarm purchase decision: economic buyer, operations buyer, security/facilities influencer, finance approver, routing contact, or unknown." },
-              provider_person_id: { type: "string", description: "Apollo/person-data provider ID if returned by a provider, otherwise an empty string." },
               profile_url: { type: "string", description: "LinkedIn, company team page, bio page, or other professional source URL. Return an empty string if unavailable." },
               email: { type: "string", description: "Publicly listed or verified professional email only. Return an empty string if unavailable or unverified." },
               email_status: { type: "string", enum: ["public_source", "verified", "needs_verification", "unavailable"], description: "Email provenance. Use verified only when an external verifier/provider says verified." },
@@ -163,7 +159,7 @@ module BayAlarmLeadResearcher
               why_this_person: { type: "string", description: "Why this person is a plausible Bay Alarm buying contact."
               }
             },
-            required: ["name", "title", "company", "company_domain", "contact_type", "purchase_role", "provider_person_id", "profile_url", "email", "email_status", "email_source", "direct_phone", "phone_source", "why_this_person"],
+            required: ["name", "title", "company", "company_domain", "contact_type", "purchase_role", "profile_url", "email", "email_status", "email_source", "direct_phone", "phone_source", "why_this_person"],
             additionalProperties: false
           },
           description: "Up to five contacts, prioritizing named decision-makers with exact professional contact info over generic routing inboxes."
@@ -546,7 +542,7 @@ module BayAlarmLeadResearcher
       usage_hint "Use for promising companies from FindAll before deciding which accounts make the final lead pack."
       parameter :company_name, :string, required: true, description: "Company name to enrich."
       parameter :website, :string, required: false, description: "Company website URL, if known."
-      parameter :domain, :string, required: false, description: "Normalized company domain for Apollo/Hunter lookup, without protocol, path, www., or @ symbol."
+      parameter :domain, :string, required: false, description: "Normalized company domain, without protocol, path, www., or @ symbol."
       parameter :vertical, :string, required: true, description: "Target vertical."
       parameter :region, :string, required: true, description: "Target region."
       parameter :known_context, :string, required: false, description: "Candidate description, source notes, or fit clues from FindAll."
@@ -564,7 +560,7 @@ module BayAlarmLeadResearcher
           vertical: vertical,
           region: region,
           known_context: known_context,
-          task: "Enrich this account as a Bay Alarm commercial-security sales prospect. Use current web sources. Do not invent facts. Verify or recover the official website and normalized bare domain for later Apollo People Search."
+          task: "Enrich this account as a Bay Alarm commercial-security sales prospect. Use current web sources. Do not invent facts. Verify or recover the official website and normalized bare domain for contact research."
         }.compact
 
         run = @parallel_client.create_task_run(
@@ -622,7 +618,7 @@ module BayAlarmLeadResearcher
             vertical: vertical,
             region: region,
             known_context: account["known_context"],
-            task: "Enrich this account as a Bay Alarm commercial-security sales prospect. Use current web sources. Do not invent facts. Verify or recover the official website and normalized bare domain for later Apollo People Search."
+            task: "Enrich this account as a Bay Alarm commercial-security sales prospect. Use current web sources. Do not invent facts. Verify or recover the official website and normalized bare domain for contact research."
           }.compact
 
           run = @parallel_client.create_task_run(
@@ -651,7 +647,7 @@ module BayAlarmLeadResearcher
       usage_hint "Use only for qualified accounts. Use pro by default because contact research needs multi-source verification and role disambiguation. Prioritize real people: owner/CEO/president, operations leader, general manager, facilities/security/yard/fleet/dispatch manager, controller/CFO. Return direct public or verified professional emails and direct work phones when available. Generic inboxes are fallback routing contacts only. Never fabricate or pattern-guess emails."
       parameter :company_name, :string, required: true, description: "Company name."
       parameter :website, :string, required: false, description: "Company website URL, if known."
-      parameter :domain, :string, required: false, description: "Normalized company domain for Apollo People Search/Hunter lookup, without protocol, path, www., or @ symbol."
+      parameter :domain, :string, required: false, description: "Normalized company domain, without protocol, path, www., or @ symbol."
       parameter :target_roles, :array, required: true, items: :string, description: "Professional roles to look for."
       parameter :region, :string, required: true, description: "Relevant geography."
       parameter :processor, :enum, required: false, enum: %w[base base-fast core core-fast core2x core2x-fast pro pro-fast], default: DEFAULT_PROCESSOR, description: "Parallel processor to use."
@@ -667,7 +663,7 @@ module BayAlarmLeadResearcher
           domain: domain,
           target_roles: target_roles,
           region: region,
-          rules: "Professional context only. Use the normalized company domain when available as the strongest company identifier for Apollo/Hunter-style lookup. Find exact named decision-makers first: owner/CEO/president, operations leader, GM, facilities/security/yard/fleet/dispatch manager, controller/CFO. Return provider IDs/profile URLs when available. Return direct public or verified professional emails and direct work phones when available. Generic inboxes are fallback routing contacts only and should use contact_type generic_routing_inbox. If no verified/public email is found for a named person, return an empty email string and email_status unavailable or needs_verification. Never fabricate or pattern-guess emails."
+          rules: "Professional context only. Use the normalized company domain when available as the strongest company identifier. Find exact named decision-makers first: owner/CEO/president, operations leader, GM, facilities/security/yard/fleet/dispatch manager, controller/CFO. Return profile URLs when available. Return direct public or verified professional emails and direct work phones when available. Generic inboxes are fallback routing contacts only and should use contact_type generic_routing_inbox. If no verified/public email is found for a named person, return an empty email string and email_status unavailable or needs_verification. Never fabricate or pattern-guess emails."
         }.compact
 
         run = @parallel_client.create_task_run(
@@ -723,7 +719,7 @@ module BayAlarmLeadResearcher
             domain: account["domain"],
             target_roles: target_roles,
             region: region,
-            rules: "Professional context only. Use the normalized company domain when available as the strongest company identifier for Apollo/Hunter-style lookup. Find exact named decision-makers first: owner/CEO/president, operations leader, GM, facilities/security/yard/fleet/dispatch manager, controller/CFO. Return provider IDs/profile URLs when available. Return direct public or verified professional emails and direct work phones when available. Generic inboxes are fallback routing contacts only and should use contact_type generic_routing_inbox. If no verified/public email is found for a named person, return an empty email string and email_status unavailable or needs_verification. Never fabricate or pattern-guess emails."
+            rules: "Professional context only. Use the normalized company domain when available as the strongest company identifier. Find exact named decision-makers first: owner/CEO/president, operations leader, GM, facilities/security/yard/fleet/dispatch manager, controller/CFO. Return profile URLs when available. Return direct public or verified professional emails and direct work phones when available. Generic inboxes are fallback routing contacts only and should use contact_type generic_routing_inbox. If no verified/public email is found for a named person, return an empty email string and email_status unavailable or needs_verification. Never fabricate or pattern-guess emails."
           }.compact
 
           run = @parallel_client.create_task_run(
@@ -809,6 +805,7 @@ end
 
 TurnKit.configure do |config|
   config.default_model = BayAlarmLeadResearcher::DEFAULT_MODEL
+  TurnKitExamples.prepare_model(config.default_model)
   config.store = TurnKit::MemoryStore.new
   config.compaction = {
     context_limit: Integer(ENV.fetch("TURNKIT_CONTEXT_LIMIT", "96000")),
@@ -849,12 +846,13 @@ else
   JSON.parse(File.read(ENV.fetch("BAY_ALARM_CACHED_VERTICAL_RESEARCH_FILE")))
 end
 
+thinking_effort = ENV.fetch("TURNKIT_THINKING_EFFORT", TurnKit.default_model == "gpt-5.6-sol" ? "none" : "medium")
 agent = TurnKit::Agent.new(
   name: "bay_alarm_lead_researcher",
   orchestrator: true,
   description: "Builds cited Bay Alarm cold-outbound lead packs for one Southern California vertical.",
   model: TurnKit.default_model,
-  thinking: { effort: ENV.fetch("TURNKIT_THINKING_EFFORT", "medium") },
+  thinking: { effort: thinking_effort },
   skills: [skill],
   tools: BayAlarmLeadResearcher.tools(
     parallel_client: parallel_client,
@@ -869,7 +867,7 @@ agent = TurnKit::Agent.new(
   instructions: <<~TEXT
     You are a senior B2B sales research operator building lead packs for Bay Alarm.
     Bay Alarm sells commercial alarm systems, monitoring, video security, fire
-    monitoring, access control, and related services. Use GPT-5.5 medium thinking
+    monitoring, access control, and related services. Use the configured model
     for planning, source judgment, fit scoring, and final synthesis; use Parallel
     tools for live web research, entity discovery, and structured enrichment.
 
@@ -892,14 +890,13 @@ agent = TurnKit::Agent.new(
       off quality/freshness for latency and are only for explicit speed requests.
     - Research the vertical before finding companies.
     - Prefer quality and citation strength over list size.
-    - Preserve Apollo-ready identifiers for every account: canonical company
+    - Preserve identifiers for every account: canonical company
       name, official website URL, bare domain without www/protocol/path, and the
       relevant Southern California location.
     - Before contact research, ensure each shortlisted account has a domain when
-      one can be found; domain is the strongest input for Apollo People Search.
-    - When searching contacts, prioritize buyer-title and seniority combinations
-      that map cleanly to Apollo: owner/founder/c_suite/partner/vp/head/director/
-      manager plus owner, president, CEO, dealer principal, GM, operations,
+      one can be found to distinguish companies with similar names.
+    - When searching contacts, prioritize buyer titles: owner, president,
+      CEO, dealer principal, GM, operations,
       facilities, security, fleet, yard, dispatch, controller, and CFO titles.
     - Treat Southern California as the default region when the request is broad.
     - Do not fabricate businesses, people, emails, source URLs, or buying signals.
@@ -916,7 +913,7 @@ run = agent.run(
     request: request,
     default_region: BayAlarmLeadResearcher::DEFAULT_REGION,
     default_model: BayAlarmLeadResearcher::DEFAULT_MODEL,
-    thinking_effort: ENV.fetch("TURNKIT_THINKING_EFFORT", "medium"),
+    thinking_effort: thinking_effort,
     cached_vertical_research: cached_vertical_research
   }.compact
 )

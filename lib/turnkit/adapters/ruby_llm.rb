@@ -37,6 +37,12 @@ module TurnKit
 
         response = complete_without_tool_execution(chat)
         normalize_response(response, model: model)
+      rescue ConfigError
+        raise
+      rescue ::RubyLLM::Error, ::RubyLLM::ModelNotFoundError => error
+        # Provider failures (after RubyLLM's own retries) are task failures,
+        # not worker crashes to be replayed by durable reconciliation.
+        raise ModelError, "#{error.class}: #{error.message}"
       end
 
       def paint(prompt:, model:, provider: nil, size: nil, assume_model_exists: nil, input_images: nil, mask: nil, params: {}, metadata: nil, on_event: nil)
@@ -53,6 +59,10 @@ module TurnKit
           params: params || {}
         )
         normalize_image_response(image, model: model, provider: provider, params: { "size" => size || "1024x1024" }.merge(params || {}), metadata: metadata)
+      rescue ConfigError
+        raise
+      rescue ::RubyLLM::Error, ::RubyLLM::ModelNotFoundError => error
+        raise ModelError, "#{error.class}: #{error.message}"
       end
 
       def view_media(media:, objective:, model:, provider: nil, output_schema: nil, params: {}, metadata: nil, on_event: nil)
@@ -69,6 +79,10 @@ module TurnKit
 
         response = complete_without_tool_execution(chat)
         normalize_media_analysis_response(response, media: media_input, model: model, provider: provider, params: params || {}, metadata: metadata)
+      rescue ConfigError
+        raise
+      rescue ::RubyLLM::Error, ::RubyLLM::ModelNotFoundError => error
+        raise ModelError, "#{error.class}: #{error.message}"
       end
 
       private

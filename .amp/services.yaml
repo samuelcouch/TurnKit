@@ -6,3 +6,8 @@ services:
       -c config_file=/etc/postgresql/15/main/postgresql.conf
       -c fsync=off -c synchronous_commit=off
     port: 5432
+  durable-research:
+    command: bundle exec ruby examples/durable_research/jobs.rb
+    env:
+      TURNKIT_DEMO_LIVE: "0"
+      TURNKIT_DEMO_DATABASE_URL: "postgresql:///turnkit_demo"

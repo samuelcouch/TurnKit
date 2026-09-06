@@ -37,6 +37,21 @@ module TurnKit
       self
     end
 
+    def perform_later(callback: nil)
+      turn.perform_later(callback: callback)
+      self
+    end
+
+    def wait_for(*targets)
+      turn.wait_for(*targets)
+      self
+    end
+
+    def cancel!(descendants: :retain, principal: nil)
+      turn.cancel!(descendants: descendants, principal: principal)
+      self
+    end
+
     def reload
       turn.reload
       self

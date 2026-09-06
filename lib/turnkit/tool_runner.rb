@@ -7,14 +7,22 @@ module TurnKit
     end
 
     def dispatch(tool_calls)
+      waiting = false
       tool_calls.each_with_index do |tool_call, index|
-        execution = run(tool_call)
+        # Fan out a contiguous group of subagents, but never reorder ordinary
+        # tools across it or execute past a terminal tool.
+        return :waiting if waiting && !subagent?(tool_for(tool_call.name))
+        execution = run(tool_call, defer_result: waiting)
+        if execution == :waiting
+          waiting = true
+          next
+        end
         if execution.completed? && tool_for(tool_call.name)&.ends_turn?
           skip_remaining(tool_calls.drop(index + 1), terminal: tool_call)
           return execution
         end
       end
-      nil
+      waiting ? :waiting : nil
     end
 
     def completion_message(execution)
@@ -25,11 +33,30 @@ module TurnKit
     private
       attr_reader :turn
 
-      def run(tool_call)
-        execution = ToolExecution.new(create_execution(tool_call))
-        heartbeat!
-
+      def run(tool_call, defer_result: false)
+        @defer_result = defer_result
         tool = tool_for(tool_call.name)
+        existing = turn.store.list_tool_executions(turn_id: turn.id).find { |row| row["tool_call_id"] == tool_call.id }
+        if existing && !%w[pending running].include?(existing["status"])
+          execution = ToolExecution.new(existing)
+          append_result_once(execution, tool_call, execution.result || execution.error, error: !execution.completed? && !execution.cancelled?)
+          return execution
+        end
+
+        denied = nil
+        execution = turn.store.atomic do
+          execution = ToolExecution.new(existing || create_execution(tool_call))
+          unless existing
+            begin
+              turn.execution_budget(excluding: execution.id).count_tool_execution!(tool_call.name)
+            rescue BudgetError => error
+              denied = error
+              finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "budget_denied" => true })
+            end
+          end
+          execution
+        end
+        raise denied if denied
 
         unless tool
           return finish_error(execution, tool_call, "unknown tool: #{tool_call.name}")
@@ -39,20 +66,33 @@ module TurnKit
           return finish_error(execution, tool_call, tool_call.arguments_error)
         end
 
-        begin
-          turn.budget.count_tool_execution!(tool_call.name)
-        rescue BudgetError => error
-          finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "budget_denied" => true })
-          raise
+        if execution.status == "pending" && !subagent?(tool) && ![WaitTool, LaunchAgentTool, SendMessageTool].include?(tool)
+          claimed = turn.store.claim_tool_execution(execution.id, from: "pending", to: "running", started_at: Clock.now)
+          raise LostClaim, "tool execution claim was revoked" unless claimed
+          execution = ToolExecution.new(claimed)
         end
 
         context = ToolContext.new(turn: turn, execution: execution)
         payload = begin
-          normalize_payload(call_tool(tool, tool_call.arguments, context: context))
+          Authorization.authorize!(:tool, principal: context.principal, turn: turn, tool: tool, arguments: tool_call.arguments)
+          # Observe cancellation/reconciliation immediately before crossing the
+          # external-effect boundary. Calls already sent cannot be recalled.
+          turn.store.atomic { true }
+          if turn.background? && subagent?(tool)
+            return delegate(tool, tool_call, context)
+          end
+          value = call_tool(tool, tool_call.arguments, context: context)
+          return :waiting if value == :waiting && tool == WaitTool
+          normalize_payload(value)
+        rescue LostClaim
+          raise
         rescue BudgetError => error
           finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "budget_denied" => true })
           raise
+        rescue AuthorizationError => error
+          return finish_error(execution, tool_call, error.message, details: { "class" => error.class.name, "authorization_denied" => true })
         rescue StandardError => error
+          raise if turn.background? && !error.is_a?(ToolError)
           return finish_error(execution, tool_call, error.message, details: { "class" => error.class.name })
         end
         finish_success(execution, tool_call, payload)
@@ -63,7 +103,7 @@ module TurnKit
           "turn_id" => turn.id,
           "tool_call_id" => tool_call.id,
           "tool_name" => tool_call.name,
-          "status" => "running",
+          "status" => turn.background? && (subagent?(tool_for(tool_call.name)) || [WaitTool, LaunchAgentTool, SendMessageTool].include?(tool_for(tool_call.name))) ? "pending" : "running",
           "arguments" => tool_call.arguments,
           "started_at" => Clock.now
         )
@@ -71,11 +111,12 @@ module TurnKit
 
       def finish_success(execution, tool_call, payload)
         json = payload.to_json
-        attrs = turn.store.claim_tool_execution(execution.id, from: "running", to: "completed", result: payload, completed_at: Clock.now)
+        attrs = turn.store.atomic do
+          row = turn.store.claim_tool_execution(execution.id, from: execution.status, to: "completed", result: payload, completed_at: Clock.now)
+          append_result_once(execution, tool_call, payload) if row
+          row
+        end
         return superseded_execution(execution) unless attrs
-
-        append_result(execution, tool_call, payload, json: json, error: false)
-        heartbeat!
         turn.emit("tool_call.completed", id: tool_call.id, name: tool_call.name, result_chars: json.length)
         ToolExecution.new(attrs)
       end
@@ -83,11 +124,12 @@ module TurnKit
       def finish_error(execution, tool_call, message, details: nil)
         error = { "message" => message.to_s, "details" => details }.compact
         json = error.to_json
-        attrs = turn.store.claim_tool_execution(execution.id, from: "running", to: "failed", error: error, completed_at: Clock.now)
+        attrs = turn.store.atomic do
+          row = turn.store.claim_tool_execution(execution.id, from: execution.status, to: "failed", error: error, completed_at: Clock.now)
+          append_result_once(execution, tool_call, error, error: true) if row
+          row
+        end
         return superseded_execution(execution) unless attrs
-
-        append_result(execution, tool_call, error, json: json, error: true)
-        heartbeat!
         turn.emit("tool_call.failed", id: tool_call.id, name: tool_call.name, error: error, result_chars: json.length)
         ToolExecution.new(attrs)
       end
@@ -98,11 +140,14 @@ module TurnKit
         ToolExecution.new(turn.store.load_tool_execution(execution.id))
       end
 
-      def append_result(execution, tool_call, payload, json: payload.to_json, error: false)
+      def append_result_once(execution, tool_call, payload, error: false)
+        return if @defer_result
+        return if turn.store.list_messages(turn.conversation.id).any? { |row| row["tool_execution_id"] == execution.id }
+
         message = turn.conversation.append_message(
           role: "tool",
           kind: "tool_result",
-          content: [ { "type" => "tool_result", "tool_call_id" => tool_call.id, "text" => json, "error" => error } ],
+          content: [ { "type" => "tool_result", "tool_call_id" => tool_call.id, "text" => payload.to_json, "error" => error } ],
           turn_id: turn.id,
           tool_execution_id: execution.id,
           metadata: { "tool_name" => tool_call.name }
@@ -112,42 +157,53 @@ module TurnKit
 
       def skip_remaining(calls, terminal:)
         calls.each do |call|
-          payload = { "skipped" => true, "message" => "not executed: turn ended by #{terminal.name}" }
-          execution = ToolExecution.new(create_execution(call))
-          attrs = turn.store.claim_tool_execution(execution.id, from: "running", to: "cancelled", result: payload, completed_at: Clock.now)
-          next unless attrs
-
-          append_result(ToolExecution.new(attrs), call, payload)
-          turn.emit("tool_call.skipped", id: call.id, name: call.name)
+          turn.store.atomic do
+            next if turn.store.list_tool_executions(turn_id: turn.id).any? { |row| row["tool_call_id"] == call.id }
+            payload = { "skipped" => true, "message" => "not executed: turn ended by #{terminal.name}" }
+            execution = ToolExecution.new(create_execution(call))
+            attrs = turn.store.claim_tool_execution(execution.id, from: execution.status, to: "cancelled", result: payload, completed_at: Clock.now)
+            append_result_once(ToolExecution.new(attrs), call, payload)
+            turn.emit("tool_call.skipped", id: call.id, name: call.name)
+          end
         end
       end
 
-      def heartbeat!
-        turn.send(:heartbeat!)
+      def subagent?(tool)
+        tool.is_a?(Class) && tool < SubAgentTool
+      end
+
+      def delegate(tool, call, context)
+        arguments = tool.validate_arguments(call.arguments)
+        Authorization.authorize!(:launch_agent, principal: context.principal, turn: turn, agent: tool.agent, arguments: arguments)
+        TurnKit.resolve_agent(tool.agent.name)
+        child = turn.store.atomic_graph do
+          turn.store.atomic(Background.root_conversation(turn.store, turn.store.load_turn(turn.id))) do
+            row = turn.store.list_turns(root_turn_id: turn.root_turn_id).find { |candidate| candidate["parent_tool_execution_id"] == context.execution.id }
+            unless row
+              built = tool.build_child(task: arguments.fetch("task"), context: context)
+              row = turn.store.update_turn(built.id, submitted_at: Clock.now)
+            end
+            Background.wait(turn, [row.fetch("id")])
+            row
+          end
+        end
+        unless Background::TERMINAL.include?(child["status"])
+          Background.enqueue(child.fetch("id")) if child["status"] == "pending"
+          return :waiting
+        end
+        finish_success(context.execution, call, SubAgentTool.result(child))
       end
 
       def tool_for(name)
-        turn.agent.effective_tools.find { |tool| tool.tool_name == name.to_s }
+        turn.agent.effective_tools(turn: turn).find { |tool| tool.tool_name == name.to_s }
       end
 
-      # Heartbeats while the tool runs so a tool slower than TurnKit.timeout
-      # keeps its turn's stale anchor fresh and is not falsely reconciled.
       def call_tool(tool, arguments, context:)
-        interval = (TurnKit.timeout || 300) / 3.0
-        heartbeat = Thread.new do
-          loop do
-            sleep interval
-            heartbeat!
-          end
-        end
-
         if tool.is_a?(Class)
           tool.call(arguments, context: context)
         else
           tool.class.invoke(tool, arguments, context: context)
         end
-      ensure
-        heartbeat.kill
       end
 
       def normalize_payload(value)

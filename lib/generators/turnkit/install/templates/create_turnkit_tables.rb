@@ -31,6 +31,8 @@ class CreateTurnkitTables < ActiveRecord::Migration[7.1]
       t.json :error
       t.text :output_text
       t.json :output_data
+      t.datetime :submitted_at
+      t.string :claim_token
       t.datetime :started_at
       t.datetime :heartbeat_at
       t.datetime :completed_at
@@ -40,6 +42,34 @@ class CreateTurnkitTables < ActiveRecord::Migration[7.1]
       t.index :conversation_uid
       t.index :root_turn_uid
       t.index [ :status, :heartbeat_at ]
+      t.index [ :status, :submitted_at, :updated_at ], name: "index_<%= table_prefix %>_turns_on_maintenance"
+    end
+
+    create_table :<%= table_prefix %>_deliveries do |t|
+      t.string :uid, null: false
+      t.string :source_conversation_uid, null: false
+      t.string :destination_conversation_uid, null: false
+      t.string :source_turn_uid
+      t.string :key, null: false
+      t.json :payload, null: false, default: {}
+      t.string :message_uid
+      t.datetime :delivered_at
+      t.timestamps
+
+      t.index :uid, unique: true
+      t.index :key, unique: true
+      t.index [ :source_conversation_uid, :created_at ]
+      t.index [ :destination_conversation_uid, :delivered_at ]
+      t.index [ :delivered_at, :created_at ], name: "index_<%= table_prefix %>_deliveries_on_pending"
+    end
+
+    create_table :<%= table_prefix %>_waits do |t|
+      t.string :turn_uid, null: false
+      t.string :target_turn_uid, null: false
+      t.timestamps
+
+      t.index [ :turn_uid, :target_turn_uid ], unique: true
+      t.index :target_turn_uid
     end
 
     create_table :<%= table_prefix %>_messages do |t|

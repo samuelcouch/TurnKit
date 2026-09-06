@@ -1,0 +1,4 @@
+development:
+  reconcile_turns:
+    class: TurnKit::ReconcileJob
+    schedule: every 5 seconds

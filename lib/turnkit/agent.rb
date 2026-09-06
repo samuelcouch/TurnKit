@@ -24,21 +24,21 @@ module TurnKit
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :max_spend, :max_depth, :max_tool_executions, :max_tool_executions_by_name
     attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction, :output_schema, :input_schema, :on_event
-    attr_reader :output_policy, :output_policy_mode, :output_policy_model, :output_retries
+    attr_reader :output_policy, :output_policy_mode, :output_policy_model, :output_retries, :context_contributors
 
     def initialize(name:, description: "", model: nil, instructions: "", orchestrator: false, tools: [], skills: [], available_skills: [], sub_agents: [],
       system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
       max_iterations: nil, timeout: nil, max_spend: nil, max_depth: nil, max_tool_executions: nil, max_tool_executions_by_name: nil, thinking: nil, compaction: nil,
-      output_schema: nil, input_schema: nil, output_policy: nil, output_policy_mode: nil, output_policy_model: nil, output_policy_thinking: nil, output_retries: 0, on_event: nil)
+      output_schema: nil, input_schema: nil, output_policy: nil, output_policy_mode: nil, output_policy_model: nil, output_policy_thinking: nil, output_retries: 0, on_event: nil, context_contributors: [], inherit_globals: true)
       @name = name.to_s
       @description = description.to_s
       @model = model
       @orchestrator = orchestrator ? true : false
       @instructions = compose_instructions(instructions)
-      @tools = Array(tools)
-      @skills = Array(skills)
-      @available_skills = Array(available_skills)
-      @sub_agents = Array(sub_agents)
+      @tools = Array(tools).dup.freeze
+      @skills = Array(skills).dup.freeze
+      @available_skills = ((inherit_globals ? Array(TurnKit.available_skills) : []) + Array(available_skills)).uniq { |skill| skill.key }.freeze
+      @sub_agents = Array(sub_agents).dup.freeze
       @system_prompt = system_prompt
       @prompt_sections = prompt_sections
       @prompt_mode = prompt_mode&.to_sym || (:task if @orchestrator)
@@ -59,6 +59,7 @@ module TurnKit
       @output_policy_mode = normalize_output_policy_mode(output_policy_mode)
       @output_retries = Integer(output_retries || 0)
       @on_event = on_event
+      @context_contributors = ((inherit_globals ? Array(TurnKit.context_contributors) : []) + Array(context_contributors)).freeze
       raise ArgumentError, "name is required" if @name.empty?
       validate_tools!
     end
@@ -78,32 +79,35 @@ module TurnKit
       attrs.slice(:effort, :budget).compact
     end
 
-    def conversation(model: nil, subject: nil, metadata: {})
+    def conversation(model: nil, subject: nil, metadata: {}, context: {}, principal: nil)
       store = effective_store
+      context = JSON.parse(JSON.generate(context))
+      metadata = metadata.merge("principal" => principal) unless principal.nil?
+      metadata = metadata.merge("turnkit_subject_prompt" => subject.to_prompt.to_s) if subject.respond_to?(:to_prompt)
       record = store.create_conversation(
         "agent_name" => name,
         "model" => model || effective_model,
         "subject" => subject,
-        "metadata" => metadata
+        "metadata" => metadata.merge("turnkit_context" => context)
       )
-      Conversation.new(agent: self, record: record, store: store, model: model || effective_model, subject: subject, metadata: metadata)
+      Conversation.new(agent: self, record: record, store: store, model: model || effective_model, subject: subject, metadata: metadata.merge("turnkit_context" => context))
     end
 
     def orchestrator?
       @orchestrator
     end
 
-    def run(task, input: nil, async: false, subject: nil, metadata: {}, parent_run: nil, root_turn_id: nil, prompt_mode: :task, **options)
+    def run(task, input: nil, async: false, subject: nil, metadata: {}, context: {}, principal: nil, parent_run: nil, root_turn_id: nil, prompt_mode: :task, **options)
       raise ArgumentError, "task is required" if task.to_s.empty?
       SchemaCheck.validate!(input, input_schema, error_class: InputError, label: "input") if input_schema
 
-      conversation = self.conversation(subject: subject, metadata: metadata)
+      conversation = self.conversation(subject: subject, metadata: metadata, context: context, principal: principal)
       message = conversation.say(task_message(task, input), metadata: { "source" => "application", "task" => true })
       turn = conversation.build_turn(
         trigger_message_id: message.id,
         root_turn_id: root_turn_id || parent_run_root_turn_id(parent_run),
         prompt_mode: prompt_mode,
-        **options
+        principal: principal, context: context, **options
       )
       run = Run.new(turn)
       async ? run : run.run!
@@ -137,10 +141,11 @@ module TurnKit
       store || TurnKit.store
     end
 
-    def effective_tools
-      configured = tools + sub_agents.map { |agent| SubAgentTool.for(agent) }
-      skills = effective_available_skills
-      skills.empty? ? configured : configured + [ LoadSkillTool.for(skills) ]
+    def effective_tools(turn: nil)
+      loaded = turn ? turn.tool_executions.select { |execution| execution.tool_name == "load_skill" && execution.completed? }.map { |execution| execution.result.fetch("key") } : []
+      active_skills = skills + available_skills.select { |skill| loaded.include?(skill.key) }
+      configured = tools + active_skills.flat_map(&:tools) + sub_agents.map { |agent| SubAgentTool.for(agent) }
+      available_skills.empty? ? configured : configured + [ LoadSkillTool.for(available_skills) ]
     end
 
     def effective_on_event
@@ -148,7 +153,7 @@ module TurnKit
     end
 
     def effective_available_skills
-      (Array(TurnKit.available_skills) + available_skills).uniq { |skill| skill.key }
+      available_skills
     end
 
     def effective_prompt_sections
@@ -204,18 +209,19 @@ module TurnKit
       end
 
       def validate_tools!
-        effective_tools.each do |tool|
+        all_tools = effective_tools + available_skills.flat_map(&:tools)
+        all_tools.each do |tool|
           next if tool.is_a?(Class) && tool < Tool
           next if tool.is_a?(Tool)
 
           raise ArgumentError, "tools must be TurnKit::Tool classes or instances"
         end
 
-        names = effective_tools.map(&:tool_name)
+        names = all_tools.map(&:tool_name)
         duplicate = names.find { |name| names.count(name) > 1 }
         raise ArgumentError, "duplicate tool name: #{duplicate}" if duplicate
 
-        effective_tools.each(&:validate_definition!)
+        all_tools.each(&:validate_definition!)
       end
 
       def normalize_output_policy(value, model: nil, thinking: nil)

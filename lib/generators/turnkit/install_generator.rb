@@ -23,6 +23,8 @@ module TurnKit
         template "turn.rb", "app/models/turnkit/turn.rb"
         template "message.rb", "app/models/turnkit/message.rb"
         template "tool_execution.rb", "app/models/turnkit/tool_execution.rb"
+        template "delivery.rb", "app/models/turnkit/delivery.rb"
+        template "wait.rb", "app/models/turnkit/wait.rb"
       end
 
       def create_ai_directories

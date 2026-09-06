@@ -1,8 +1,7 @@
 # Image Generation Smoke Test
 
-This example verifies TurnKit's first-class image path with the local
-`generate-image` CLI and its `nano-banana-pro` alias for Gemini's
-`gemini-3-pro-image-preview` model.
+This example verifies TurnKit's first-class image path with `gpt-image-2`
+through the standard `TurnKit::Adapters::RubyLLM` adapter.
 
 It exercises:
 
@@ -12,27 +11,26 @@ It exercises:
 - image message persistence
 - usage/cost/event plumbing
 
-Run it with a Gemini-capable image CLI configuration:
+Set an OpenAI API key and run it:
 
 ```sh
-ruby examples/image_generation/nano_banana_16x9.rb
+export OPENAI_API_KEY=...
+ruby examples/image_generation/gpt_image_2.rb
 ```
 
 Or choose the output path:
 
 ```sh
-ruby examples/image_generation/nano_banana_16x9.rb /tmp/header.jpg
+ruby examples/image_generation/gpt_image_2.rb /tmp/header.png
 ```
 
-The example calls:
+Override the model when testing another RubyLLM-compatible OpenAI image model:
 
 ```sh
-generate-image \
-  --provider gemini \
-  --model nano-banana-pro \
-  --aspect-ratio 16:9 \
-  --image-size 1K
+TURNKIT_IMAGE_MODEL=my-image-model ruby examples/image_generation/gpt_image_2.rb
 ```
 
-It writes the generated image to `/tmp/turnkit-nano-banana-pro-16x9.jpg` by
-default so generated binaries are not added to the repository.
+The example requests PNG output at `1536x1024`, persists the image message and
+prints lifecycle events, usage, and cost. It writes the generated image to
+`/tmp/turnkit-gpt-image-2.png` by default so generated binaries are not added to
+the repository.

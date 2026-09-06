@@ -18,9 +18,19 @@ module TurnKit
         provider: self.class.provider,
         size: self.class.size,
         assume_model_exists: self.class.assume_model_exists,
+        input_images: input_images(**arguments),
+        mask: mask(**arguments),
         params: self.class.params || {},
         metadata: metadata(**arguments)
       ).to_h
+    end
+
+    def input_images(**)
+      nil
+    end
+
+    def mask(**)
+      nil
     end
 
     def metadata(**)

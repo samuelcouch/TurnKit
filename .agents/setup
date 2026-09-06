@@ -76,7 +76,11 @@ fi
 if [[ $(sudo -u postgres psql -Atqc "SELECT 1 FROM pg_roles WHERE rolname = 'user'") != 1 ]]; then
   sudo -u postgres createuser user
 fi
-if [[ $(sudo -u postgres psql -Atqc "SELECT 1 FROM pg_database WHERE datname = 'turnkit_test'") != 1 ]]; then
-  sudo -u postgres createdb -O user turnkit_test
-fi
+for database in turnkit_test turnkit_demo; do
+  if [[ $(sudo -u postgres psql -Atqc "SELECT 1 FROM pg_database WHERE datname = '$database'") != 1 ]]; then
+    sudo -u postgres createdb -O user "$database"
+  fi
+done
+TURNKIT_DEMO_LIVE=0 TURNKIT_DEMO_DATABASE_URL=postgresql:///turnkit_demo \
+  bundle exec ruby examples/durable_research/setup.rb
 echo "[turnkit] Ready in ${SECONDS}s"

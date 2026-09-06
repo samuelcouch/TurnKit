@@ -92,11 +92,7 @@ class ReconciliationTest < Minitest::Test
     results = store.list_messages(conversation.fetch("id")).select { |message| message["kind"] == "tool_result" }
     assert_equal 1, results.length
   end
-  # `stale` is provisional: reconciliation never spawns a successor turn, so a
-  # still-live worker keeps commit authority and finishes its turn normally —
-  # while the interrupted tool execution and its synthetic result stay
-  # authoritative (first-commit-wins at the tool level).
-  def test_false_stale_is_overwritten_when_the_original_worker_finishes
+  def test_reconciled_worker_loses_commit_authority
     events = []
     TurnKit.on_event = ->(event) { events << event }
     client = FakeClient.new(
@@ -107,7 +103,7 @@ class ReconciliationTest < Minitest::Test
 
     turn = agent.conversation.ask("go")
 
-    assert turn.completed?
+    assert turn.stale?
     execution = turn.tool_executions.first
     assert execution.interrupted?
     assert_nil execution.result
@@ -117,7 +113,8 @@ class ReconciliationTest < Minitest::Test
     assert results.first["content"].first.fetch("error")
 
     types = events.map(&:type)
-    assert_operator types.index("turn.stale"), :<, types.index("turn.completed")
+    assert_includes types, "turn.stale"
+    refute_includes types, "turn.completed"
   ensure
     TurnKit.on_event = nil
   end

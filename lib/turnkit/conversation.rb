@@ -20,6 +20,24 @@ module TurnKit
       append_message(role: "user", kind: "text", text: text, metadata: metadata)
     end
 
+    def subject_prompt
+      subject.respond_to?(:to_prompt) ? subject.to_prompt.to_s : metadata["turnkit_subject_prompt"].to_s
+    end
+
+    def send_message(destination, text, key:, principal: nil)
+      Authorization.authorize!(:send_message, principal: principal, source_conversation: id, destination_conversation: destination.respond_to?(:id) ? destination.id : destination)
+      Background.send_message(source: id, destination: destination.respond_to?(:id) ? destination.id : destination,
+        text: text, key: key, store: store, principal: principal)
+    end
+
+    def inbox
+      store.list_deliveries(destination_conversation_id: id)
+    end
+
+    def outbox
+      store.list_deliveries(source_conversation_id: id)
+    end
+
     def ask(text, async: false, **options)
       trigger = say(text)
       turn = build_turn(trigger_message_id: trigger.id, **options)
@@ -30,14 +48,18 @@ module TurnKit
       build_turn(trigger_message_id: trigger_message_id, model: model, budget: budget, parent_turn: parent_turn, parent_tool_execution: parent_tool_execution, root_turn_id: root_turn_id, depth: depth, agent: agent, thinking: thinking, compact: compact, output_schema: output_schema, prompt_mode: prompt_mode, on_event: on_event).run!
     end
 
-    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, root_turn_id: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, prompt_mode: nil, on_event: nil)
+    def build_turn(trigger_message_id: nil, model: nil, budget: nil, parent_turn: nil, parent_tool_execution: nil, root_turn_id: nil, depth: 0, agent: self.agent, thinking: THINKING_UNSET, compact: nil, output_schema: nil, prompt_mode: nil, on_event: nil, context: nil, principal: nil)
       snapshot = latest_message_sequence
       effective_thinking = thinking.equal?(THINKING_UNSET) ? agent.effective_thinking : Agent.normalize_thinking(thinking)
       options = { "trigger_message_id" => trigger_message_id }.compact
+      options["budget_limits"] = agent.budget_limits.transform_keys(&:to_s)
       options["thinking"] = effective_thinking
       options["compact"] = compact unless compact.nil?
       options["output_schema"] = output_schema || agent.output_schema if output_schema || agent.output_schema
       options["prompt_mode"] = prompt_mode.to_sym if prompt_mode
+      options["context"] = JSON.parse(JSON.generate(context || metadata["turnkit_context"] || {}))
+      principal ||= metadata["principal"]
+      options["principal"] = JSON.parse(JSON.generate(principal)) unless principal.nil?
       record = store.create_turn(
         "conversation_id" => id,
         "agent_name" => agent.name,

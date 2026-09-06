@@ -27,7 +27,7 @@ Use OpenAI or any RubyLLM-supported provider:
 
 ```sh
 export OPENAI_API_KEY=...
-export TURNKIT_MODEL=gpt-5.2
+export TURNKIT_MODEL=gpt-5.6-sol
 ```
 
 The web tools use Parallel:

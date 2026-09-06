@@ -8,7 +8,7 @@ require "turnkit"
 require_relative "../shared/parallel_client"
 
 module AmazonMemoWriter
-  DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5")
+  DEFAULT_MODEL = ENV.fetch("TURNKIT_MODEL", "gpt-5.6-sol")
   DEFAULT_TASK = "Write a memo recommending whether PhotoDay should add bib-number photo search for race events. Audience: founder and product lead. Decision deadline: this week."
 
   class AmazonMemo
@@ -336,7 +336,7 @@ module AmazonMemoWriter
     AmazonMemo.rendered_violations(output, expected_sources: expected_sources)
   end
 
-  def self.semantic_policy(model: DEFAULT_MODEL, thinking: { effort: :medium })
+  def self.semantic_policy(model: DEFAULT_MODEL, thinking: { effort: model == "gpt-5.6-sol" ? :none : :medium })
     TurnKit::OutputPolicy.new(
       model: model,
       thinking: thinking,
@@ -358,7 +358,7 @@ module AmazonMemoWriter
     )
   end
 
-  def self.workflow(model: DEFAULT_MODEL, thinking: { effort: :medium }, client: TurnKit::Adapters::RubyLLM.new, parallel_client: TurnKitExamples::ParallelClient.new, on_event: nil, semantic_audit: true)
+  def self.workflow(model: DEFAULT_MODEL, thinking: { effort: model == "gpt-5.6-sol" ? :none : :medium }, client: TurnKit::Adapters::RubyLLM.new, parallel_client: TurnKitExamples::ParallelClient.new, on_event: nil, semantic_audit: true)
     voice = memo_voice_skill
     policies = [ ->(output) { format_policy(output) } ]
     policies << semantic_policy(model: model, thinking: thinking) if semantic_audit
@@ -426,7 +426,7 @@ module AmazonMemoWriter
     }
   end
 
-  def self.benchmark(task: DEFAULT_TASK, model: DEFAULT_MODEL, thinking: { effort: ENV.fetch("TURNKIT_THINKING_EFFORT", "medium").to_sym }, semantic_audit: true)
+  def self.benchmark(task: DEFAULT_TASK, model: DEFAULT_MODEL, thinking: { effort: ENV.fetch("TURNKIT_THINKING_EFFORT", model == "gpt-5.6-sol" ? "none" : "medium").to_sym }, semantic_audit: true)
     TurnKit.store = TurnKit::MemoryStore.new
     TurnKit.default_model = model
     TurnKit.client = TurnKit::Adapters::RubyLLM.new
@@ -462,6 +462,8 @@ module AmazonMemoWriter
 end
 
 if $PROGRAM_NAME == __FILE__
+  require_relative "../shared/model_registry"
+  TurnKitExamples.prepare_model(AmazonMemoWriter::DEFAULT_MODEL)
   result = AmazonMemoWriter.benchmark(task: ARGV.join(" ").strip.empty? ? AmazonMemoWriter::DEFAULT_TASK : ARGV.join(" "))
   output = result.delete(:output)
   puts "--- BENCHMARK ---"

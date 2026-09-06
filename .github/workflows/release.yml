@@ -1,0 +1,61 @@
+name: Release gem
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Test and publish tagged gem
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: turnkit
+          POSTGRES_PASSWORD: turnkit
+          POSTGRES_DB: turnkit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U turnkit -d turnkit_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TURNKIT_TEST_DATABASE_URL: postgresql://turnkit:turnkit@localhost:5432/turnkit_test
+      BUNDLE_FROZEN: 'true'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3.10'
+          bundler: '2.5.22'
+          bundler-cache: true
+      - name: Verify release tag
+        run: |
+          version="$(bundle exec ruby -Ilib -rturnkit/version -e 'print TurnKit::VERSION')"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Release tag must be v$version, got $GITHUB_REF_NAME"
+            exit 1
+          fi
+      - name: Run tests including PostgreSQL persistence
+        run: bundle exec rake test
+      - name: Publish with RubyGems trusted publishing
+        uses: rubygems/release-gem@v1.4.1

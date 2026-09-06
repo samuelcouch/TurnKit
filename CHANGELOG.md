@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0 - 2026-09-06
+
+### Added
+
+- Independent background submission through Active Job, registered agent reconstruction, durable messages/completion callbacks, inbox/outbox queries, and worker-free joins.
+- Parallel background sub-agents with persisted parent/child lineage and ordered results; opt-in launch, send-message, and wait tools.
+- Persisted execution phases, fenced claims, root-wide budget reservations, and recovery of missed enqueues and abandoned workers without replaying unknown external effects.
+- PostgreSQL concurrency/process-death tests and a reversible `turnkit:upgrade` migration generator.
+- Agent-scoped context and skills, extensible specialist factories, authorization hooks, and fenced cancellation with explicit descendant handling.
+- Live recipe, deep-research and rare-earth policy examples, plus prepared orb dependencies and OIDC-based RubyGems releases.
+
+### Fixed
+
+- Reject conflicting delivery-key reuse without disclosing another conversation's payload; authorize implicit joins and detect conversation-lane wait cycles.
+- Bound inline reconciliation queries and preserve replay-safe tool keys and skill activation across recovery.
+- Forward image references and normalize RubyLLM provider failures as terminal model errors instead of repeatedly retrying permanent failures.
+
+### Breaking
+
+- Existing ActiveRecord installations must run `turnkit:upgrade` and migrate; turn records gain `submitted_at` and `claim_token`, plus delivery and wait tables.
+- Custom stores must implement the new transactional coordination contract. Reconciled inline workers lose write authority; `stale` is no longer provisional.
+- Background execution requires Active Job 7.2+ and a persistent queue backend. `async: true` remains previewable pending work; call `perform_later` to submit.
+
 ## 0.5.0 - 2026-07-22
 
 ### Breaking

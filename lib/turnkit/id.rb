@@ -6,6 +6,7 @@ module TurnKit
       conversation: "conv",
       message: "msg",
       turn: "turn",
+      delivery: "delivery",
       tool_execution: "tool"
     }.freeze
 

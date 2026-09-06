@@ -3,6 +3,31 @@
 require_relative "test_helper"
 
 class AdaptersTest < Minitest::Test
+  def test_ruby_llm_provider_errors_are_turnkit_task_failures
+    require "ruby_llm"
+    adapter = TurnKit::Adapters::RubyLLM.new
+    original_chat, original_paint = RubyLLM.method(:chat), RubyLLM.method(:paint)
+    rejected = ->(*, **) { raise RubyLLM::BadRequestError, "invalid request" }
+    RubyLLM.define_singleton_method(:chat, rejected)
+    RubyLLM.define_singleton_method(:paint, rejected)
+    error = assert_raises(TurnKit::ModelError) do
+      adapter.chat(model: "gpt-4.1-mini", messages: [], tools: [], instructions: "")
+    end
+    assert_instance_of RubyLLM::BadRequestError, error.cause
+    assert_includes error.message, "invalid request"
+    assert_raises(TurnKit::ModelError) do
+      adapter.view_media(model: "gemini-2.5-flash", media: TurnKit::MediaInput.bytes("image", mime_type: "image/png", filename: "image.png"), objective: "describe")
+    end
+    assert_raises(TurnKit::ModelError) { adapter.paint(model: "gpt-image-2", prompt: "image") }
+    RubyLLM.define_singleton_method(:chat) { |**| raise RubyLLM::ModelNotFoundError, "unknown model" }
+    assert_raises(TurnKit::ModelError) do
+      adapter.chat(model: "unknown", messages: [], tools: [], instructions: "")
+    end
+  ensure
+    RubyLLM.define_singleton_method(:chat, original_chat) if original_chat
+    RubyLLM.define_singleton_method(:paint, original_paint) if original_paint
+  end
+
   def test_ruby_llm_adapter_normalizes_output_schema_for_strict_providers
     schema = {
       type: "object",

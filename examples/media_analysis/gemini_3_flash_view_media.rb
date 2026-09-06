@@ -5,9 +5,11 @@ $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 require "base64"
 require "json"
 require "turnkit"
+require_relative "../shared/model_registry"
 
-MODEL = ENV.fetch("TURNKIT_MEDIA_MODEL", "gemini-3-flash-preview")
+MODEL = ENV.fetch("TURNKIT_MEDIA_MODEL", "gemini-3.8-flash")
 PROVIDER = :gemini
+TurnKitExamples.prepare_model(MODEL)
 
 SMOKE_PNG = Base64.decode64(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l8LeWQAAAABJRU5ErkJggg=="
@@ -38,7 +40,7 @@ agent = TurnKit::Agent.new(
   on_event: ->(event) { events << event }
 )
 
-turn = agent.run("Analyze media with Gemini 3 Flash.", async: true).turn
+turn = agent.run("Analyze media with #{MODEL}.", async: true).turn
 analysis = turn.view_media(
   media,
   objective: <<~TEXT.strip,

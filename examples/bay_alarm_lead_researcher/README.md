@@ -25,7 +25,7 @@ This is a production-shaped example for building lead-generation agents with
 TurnKit:
 
 ```text
-GPT-5.5 medium-thinking orchestrator
+GPT-5.6 Sol tool-calling orchestrator (reasoning effort: none)
   -> Parallel Task API for vertical/account/person research
   -> Parallel FindAll for company discovery
   -> Parallel Entity Search for quick people/company lookup
@@ -43,27 +43,18 @@ Use OpenAI or any RubyLLM-compatible provider that supports the configured model
 
 ```sh
 export OPENAI_API_KEY=...
-export TURNKIT_MODEL=gpt-5.5
-export TURNKIT_THINKING_EFFORT=medium
+export TURNKIT_MODEL=gpt-5.6-sol
+export TURNKIT_THINKING_EFFORT=none
 ```
+
+Sol defaults to `none` because Chat Completions rejects reasoning with function
+tools. Other models retain `medium`; explicit thinking overrides are preserved
+and must be supported by the selected provider.
 
 The web research tools use Parallel:
 
 ```sh
 export PARALLEL_API_KEY=...
-```
-
-The shared examples also include a Hunter client for direct professional email
-discovery and verification:
-
-```sh
-export HUNTER_API_KEY=...
-```
-
-And an Apollo client for named decision-maker search and enrichment:
-
-```sh
-export APOLLO_API_KEY=...
 ```
 
 The example defaults to quality-first Parallel settings in code:
@@ -130,13 +121,7 @@ calls:
 | `save_lead_pack` | Terminal tool that validates and renders the final lead pack. |
 
 The shared `examples/shared/parallel_client.rb` includes small HTTP wrappers for
-the Parallel Task, FindAll, and Entity Search APIs. The shared
-`examples/shared/hunter_client.rb` covers Hunter Discover, Domain Search, Email
-Finder, Email Verifier, enrichment, email count, and account usage endpoints for
-future `find_verified_email` tools. The shared
-`examples/shared/apollo_client.rb` covers Apollo People API Search, Organization
-Search, people/company enrichment, bulk enrichment, webhook polling, and API
-usage/rate-limit stats for future named decision-maker discovery tools.
+the Parallel Task, FindAll, and Entity Search APIs.
 
 ## Prompting and skill strategy
 
@@ -145,19 +130,17 @@ The workflow has three layers of instructions:
 1. orchestrator `TurnKit::Agent` (`orchestrator: true`) preamble: autonomous task execution,
    tool-use discipline, and stopping criteria.
 2. Inline workflow instructions in `bay_alarm_lead_researcher.rb`: Bay Alarm
-   context, GPT-5.5 medium-thinking role, and critical no-fabrication rules.
+   context, planning role, and critical no-fabrication rules.
 3. `skills/bay_alarm_outbound_research.md`: the detailed operating procedure for
    vertical research, account scoring, contact rules, citations, and final output.
 
 The skill tells the model to research first, then discover companies, then enrich
 only promising accounts, then search contacts, then save exactly once.
 
-Because Apollo People Search performs best with structured company identifiers,
-the workflow now treats account domains as first-class data. Company discovery
+The workflow treats account domains as first-class data. Company discovery
 and enrichment should preserve the official website plus a normalized bare domain
 without protocol, path, `www.`, or `@`. Contact research should carry that domain
-forward so future Apollo-backed tools can search with `q_organization_domains_list[]`
-and then enrich only the top role-relevant people.
+forward to distinguish companies with similar names.
 
 For latency, the skill prefers `enrich_accounts` and
 `find_decision_makers_batch`. TurnKit dispatches separate tool calls serially, so
@@ -168,8 +151,7 @@ steps.
 
 ## Email policy
 
-This example intentionally does not integrate Hunter, Apollo, People Data Labs,
-NeverBounce, or another verification provider. Because of that, the prompt and
+This example does not integrate an email verification provider. The prompt and
 final save validation enforce conservative behavior:
 
 - named decision-makers are preferred over generic inboxes;
@@ -186,7 +168,7 @@ final save validation enforce conservative behavior:
 - personal/home emails should not be included.
 
 For production, add a dedicated `find_verified_email`, `verify_email`, or contact
-data-provider tool. Keep GPT-5.5 as the arbiter of provenance and purchase-role
+data-provider tool. Keep the model as the arbiter of provenance and purchase-role
 fit, not the source of truth for exact email addresses.
 
 ## Parallel processor choices

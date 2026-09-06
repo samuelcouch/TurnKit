@@ -220,7 +220,9 @@ class SystemPromptTest < Minitest::Test
     prompt = child_client.calls.first.fetch(:instructions)
     assert_includes prompt, "<sub_agent>"
     assert_includes prompt, "You are a sub-agent delegated by another TurnKit agent."
-    refute_includes prompt, "<skills_available>"
+    assert_includes prompt, "<skills_available>"
+    assert_includes prompt, "writer_skill"
+    refute_includes prompt, "<live_context>"
   end
   def test_callable_system_prompt_can_wrap_and_rerender_sections
     agent = TurnKit::Agent.new(

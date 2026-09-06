@@ -55,8 +55,7 @@ speed requests and can trade quality/freshness for latency.
 4. Use `find_companies` for the initial account list. Start smaller when the
    user did not specify count; quality beats volume. For each candidate, preserve
    the canonical company name, primary website URL, normalized domain without
-   `www.`, and relevant location. Apollo People Search depends on exact company
-   domains; a lead without a domain is harder to enrich later.
+   `www.`, and relevant location to distinguish companies with similar names.
    - Call `find_companies` at most once for the main discovery pass. Do not make
      several exploratory FindAll calls. If you need broader coverage, put the
      synonyms, geography, multi-location preference, exclusions, and quality bar
@@ -71,8 +70,8 @@ speed requests and can trade quality/freshness for latency.
    primary website/domain from company sources before contact research.
 6. Use `find_decision_makers_batch` only after accounts appear qualified. Prefer
    one batch call over repeated `find_decision_makers` calls unless you only need
-   one account. Pass the account's normalized domain whenever available so later
-   Apollo/Hunter contact lookup can use deterministic company-domain matching.
+   one account. Pass the account's normalized domain whenever available for
+   company-domain matching.
 7. Save the final pack with `save_lead_pack`. This is the terminal tool.
 
 Do not use `search_entities` during quality-first runs unless FindAll is
@@ -98,35 +97,6 @@ call should already include:
 Only call `find_companies` again if the first call returns an explicit tool/API
 failure or an unusably empty result. Do not retry just because the model wants a
 slightly different phrasing.
-
-## Apollo-ready data discipline
-
-Apollo works best when contact lookup starts from structured company and person
-inputs, not vague names. Throughout the workflow, collect and preserve:
-
-- `company_name`: canonical operating name, not only a DBA fragment;
-- `website`: primary company website URL;
-- `domain`: bare domain without protocol, path, `www.`, or email `@` symbol;
-- `primary_location`: the Southern California location relevant to Bay Alarm;
-- `target_roles`: buyer titles mapped to Apollo title/seniority filters;
-- known person fields when found: full name, first name, last name, title,
-  LinkedIn/profile URL, and company domain.
-
-When preparing contact research, think in Apollo terms:
-
-- Use domain as the strongest company identifier (`q_organization_domains_list[]`).
-- Use seniorities such as `owner`, `founder`, `c_suite`, `partner`, `vp`, `head`,
-  `director`, and `manager` to avoid low-authority contacts.
-- Use title terms that match physical-security buying authority: owner,
-  president, CEO, dealer principal, general manager, operations manager,
-  facilities manager, security manager, fleet manager, yard manager, dispatch
-  manager, controller, and CFO.
-- Prefer `contact_email_status` values `verified` and `likely to engage` when an
-  Apollo search tool is available.
-- Do not spend enrichment calls on weak candidates. Shortlist the top 1-3 people
-  per account by role relevance before revealing or verifying contact details.
-- If only company names are available, recover the website/domain before trying
-  person enrichment. Name-only matches are lower quality and more ambiguous.
 
 ## Latency discipline
 
@@ -178,7 +148,7 @@ Penalize:
 - For each named contact, look for exact professional contact info: direct work
   email, direct office phone, company profile page, LinkedIn/profile URL, and the
   source that ties the person to the company.
-- If a provider like Apollo returns a named person without an email, keep the
+- If research returns a named person without an email, keep the
   person if their role is strong, set `email_status` to `needs_verification` or
   `unavailable`, and include the profile/provider source. Do not downgrade to a
   generic inbox unless no named contact exists.

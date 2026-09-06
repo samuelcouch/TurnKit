@@ -13,6 +13,7 @@ module TurnKit
       @agent = agent
       @conversation = conversation
       @store = store
+      @base_store = store
       @record = record.transform_keys(&:to_s)
       @id = @record.fetch("id")
       @conversation_id = @record.fetch("conversation_id")
@@ -36,60 +37,87 @@ module TurnKit
       @on_event = block if block
       return self unless status == "pending"
 
-      claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
+      @store = @base_store
+      claimed = Background.claim(store, @record)
       return self unless claimed
 
       @record = claimed
       @started_at = @record["started_at"]
-      emit("turn.started", status: status, model: model)
-      agent.effective_client.validate!(model: model)
-      @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: agent.budget_limits)
-      revisions_used = 0
-      loop do
-        budget.check!(depth: depth)
-        count_iteration!
-        TurnKit::Compaction.maybe_compact!(self)
-
-        request = model_request
-        emit_model_requested("model.requested", request)
-        result = call_client(request)
-        result_cost = Cost.from_usage(result.usage, model: result.model || model)
-
-        add_usage!(result.usage, cost: result_cost)
-        emit_model_completed("model.completed", result, result_cost, model: model)
-        budget.add_cost!(result_cost.total)
-        persist_assistant_message(result)
-
-        if result.tool_calls?
-          runner = ToolRunner.new(self)
-          terminal = runner.dispatch(result.tool_calls)
-          if terminal
-            candidate = append_terminal_completion(runner, terminal)
-          else
-            next
-          end
-        else
-          candidate = result.text
-        end
-
-        audit = check_policy(candidate, output_data: result.output_data)
-        if should_revise?(audit, revisions_used)
-          revisions_used += 1
-          append_revision_message(audit, attempt: revisions_used, terminal_tool_name: terminal&.tool_name)
-          emit("output_policy.revision", violation_count: audit.violations.length, attempt: revisions_used)
-          next
-        end
-
-        complete_with_output(candidate, output_data: result.output_data, audit: audit)
-        break
+      fence!
+      with_heartbeat do
+        emit("turn.started", status: status, model: model)
+        agent.effective_client.validate!(model: model)
+        execute
       end
       reload
       self
+    rescue LostClaim
+      reload
     rescue StandardError => error
+      # Background infrastructure failures must reach the job backend. The
+      # reconciler recovers the persisted phase rather than guessing here.
+      raise if background? && !error.is_a?(TurnKit::Error)
+      raise unless claimed
+
       update!(status: "failed", error: { "class" => error.class.name, "message" => error.message }, completed_at: Clock.now)
       emit("turn.failed", error: { "class" => error.class.name, "message" => error.message })
       reload
       self
+    end
+
+    def background? = !!@record["submitted_at"]
+
+    def perform_later(callback: nil)
+      Background.submit(self, callback: callback.respond_to?(:id) ? callback.id : callback)
+    end
+
+    def wait_for(*targets)
+      Background.wait(self, targets.flatten, transition: true)
+      reload
+    end
+
+    def suspend!
+      update!(status: "waiting", claim_token: nil)
+    end
+
+    # Revokes the local claim. An already-sent remote request cannot be
+    # recalled, but ExecutionStore fences every later write from that worker.
+    def cancel!(descendants: :retain, principal: nil)
+      raise ArgumentError, "descendants must be :retain or :cascade" unless %i[retain cascade].include?(descendants)
+      Authorization.authorize!(:cancel, principal: principal, turn: self, descendants: descendants)
+      @base_store.atomic(Background.root_conversation(@base_store, @record)) do
+        all = @base_store.list_turns(root_turn_id: root_turn_id)
+        rows = [@base_store.load_turn(id)]
+        if descendants == :cascade
+          descendant_ids = { id => true }
+          loop do
+            added = all.select { |row| row["parent_turn_id"] && descendant_ids[row["parent_turn_id"]] && !descendant_ids[row["id"]] }
+            break if added.empty?
+            added.each { |row| descendant_ids[row["id"]] = true }
+          end
+          rows.concat(all.select { |row| row["id"] != id && descendant_ids[row["id"]] })
+        end
+        rows.each do |row|
+          next if Background::TERMINAL.include?(row["status"])
+          executions = Reconciliation.interrupt_tool_executions(row, store: @base_store)
+          Reconciliation.repair_transcript(row, executions, store: @base_store)
+          attrs = { status: "cancelled", claim_token: nil, completed_at: Clock.now,
+            error: { "class" => "TurnKit::Cancelled", "message" => "cancelled by application" } }
+          terminal_row = @base_store.update_turn(row.fetch("id"), attrs)
+          Background.callback_after_terminal(@base_store, terminal_row) if row["submitted_at"]
+        end
+        rows.map { |row| row.fetch("conversation_id") }.uniq.each { |conversation_id| Background.wake(conversation_id, store: @base_store) } if background?
+      end
+      Background.enqueue if background?
+      reload
+    end
+
+    def execution_budget(excluding: nil)
+      root = store.load_turn(root_turn_id)
+      limits = root.dig("options", "budget_limits") || agent.budget_limits
+      turns = store.list_turns(root_turn_id: root_turn_id)
+      executions = turns.flat_map { |row| store.list_tool_executions(turn_id: row.fetch("id")) }.reject { |row| row["id"] == excluding }
+      Budget.new(**limits.transform_keys(&:to_sym), root_started_at: root["submitted_at"] || root["started_at"] || Clock.now).seed!(turns: turns, tool_executions: executions)
     end
 
     def preview
@@ -111,6 +139,8 @@ module TurnKit
     def output_data
       @record["output_data"]
     end
+
+    def context = JSON.parse(JSON.generate(@record.dig("options", "context") || {}))
 
     def policy_audit
       options = @record["options"] || {}
@@ -180,6 +210,7 @@ module TurnKit
       if claimed
         @record = claimed
         @started_at = @record["started_at"]
+        fence!
         emit("turn.started", status: status, model: model)
         @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: agent.budget_limits)
       end
@@ -218,6 +249,7 @@ module TurnKit
       if claimed
         @record = claimed
         @started_at = @record["started_at"]
+        fence!
         emit("turn.started", status: status, model: model)
         @budget = Budget.resume(store: store, root_turn_id: root_turn_id, limits: agent.budget_limits)
       end
@@ -252,6 +284,87 @@ module TurnKit
     end
 
     private
+      def fence!
+        @store = ExecutionStore.new(store, turn_id: id, token: @record.fetch("claim_token"), conversation_id: Background.root_conversation(store, @record))
+        @conversation = Conversation.new(agent: agent, record: store.load_conversation(conversation.id), store: store,
+          model: conversation.model, subject: conversation.subject, metadata: conversation.metadata)
+      end
+
+      def execute
+        loop do
+          @budget = execution_budget
+          budget.check!(depth: depth)
+          state = @record.dig("options", "state") || {}
+          case state["phase"] || "model"
+          when "model"
+            count_iteration!
+            TurnKit::Compaction.maybe_compact!(self)
+            request = model_request
+            emit_model_requested("model.requested", request)
+            result = call_client(request)
+            cost = Cost.from_usage(result.usage, model: result.model || model)
+            store.atomic do
+              add_usage!(result.usage, cost: cost)
+              persist_assistant_message(result)
+              update_state!("phase" => result.tool_calls? ? "tools" : "output", "parts" => result.parts,
+                "candidate" => result.text, "output_data" => result.output_data, "terminal_tool_name" => nil)
+            end
+            emit_model_completed("model.completed", result, cost, model: model)
+            budget.add_cost!(cost.total)
+          when "tools"
+            runner = ToolRunner.new(self)
+            terminal = runner.dispatch(Result.new(parts: state.fetch("parts")).tool_calls)
+            if terminal == :waiting
+              suspend!
+              break
+            end
+            store.atomic do
+              if terminal
+                candidate = append_terminal_completion(runner, terminal)
+                update_state!("phase" => "output", "candidate" => candidate, "terminal_tool_name" => terminal.tool_name)
+              else
+                update_state!("phase" => "model", "parts" => nil)
+              end
+            end
+          when "output"
+            candidate = state.fetch("candidate")
+            audit = check_policy(candidate, output_data: state["output_data"])
+            revisions_used = state["revisions_used"].to_i
+            if should_revise?(audit, revisions_used)
+              store.atomic do
+                append_revision_message(audit, attempt: revisions_used + 1, terminal_tool_name: state["terminal_tool_name"])
+                update_state!("phase" => "model", "parts" => nil, "revisions_used" => revisions_used + 1)
+              end
+              emit("output_policy.revision", violation_count: audit.violations.length, attempt: revisions_used + 1)
+            else
+              complete_with_output(candidate, output_data: state["output_data"], audit: audit)
+              break
+            end
+          end
+        end
+      end
+
+      def with_heartbeat
+        mutex, wake = Mutex.new, ConditionVariable.new
+        stopped = false
+        heartbeat = Thread.new do
+          loop do
+            break if mutex.synchronize {
+              wake.wait(mutex, (TurnKit.timeout || 300) / 3.0) unless stopped
+              stopped
+            }
+            heartbeat!
+          end
+        rescue LostClaim
+          # The executing thread observes the same revocation on its next write.
+        end
+        yield
+      ensure
+        # Never interrupt a database write/connection initialization mid-flight.
+        mutex.synchronize { stopped = true; wake.signal }
+        heartbeat&.value
+      end
+
       def model_request
         prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: prompt_mode || agent.effective_prompt_mode(turn: self))
         instructions, dynamic_instructions = case agent.system_prompt
@@ -265,7 +378,7 @@ module TurnKit
         ModelRequest.new(
           model: model,
           messages: llm_messages,
-          tools: agent.effective_tools,
+          tools: agent.effective_tools(turn: self),
           instructions: instructions,
           dynamic_instructions: dynamic_instructions,
           thinking: thinking,
@@ -291,11 +404,11 @@ module TurnKit
       end
 
       def call_image_client(client, request)
-        client.paint(**request, on_event: ->(event) { emit_event(event) })
+        with_heartbeat { client.paint(**request, on_event: ->(event) { emit_event(event) }) }
       end
 
       def call_media_client(client, request)
-        client.view_media(**request, on_event: ->(event) { emit_event(event) })
+        with_heartbeat { client.view_media(**request, on_event: ->(event) { emit_event(event) }) }
       end
 
       def llm_messages
@@ -392,8 +505,11 @@ module TurnKit
         else
           attrs[:status] = "completed"
         end
-        update!(attrs)
-        persist_policy_audit(audit) if audit
+        store.atomic(Background.root_conversation(store, @record)) do
+          update_state!("policy_audit" => audit.to_h) if audit
+          update!(attrs)
+        end
+        emit("output_policy.completed", clean: audit.clean?, violation_count: audit.violations.length) if audit
 
         if failed?
           emit("turn.failed", error: @record["error"])
@@ -408,11 +524,6 @@ module TurnKit
 
         output = output_data.nil? ? text : output_data
         TurnKit.check_output_policy(output, constraints: constraints, context: { turn: self, output_text: text, output_data: output_data })
-      end
-
-      def persist_policy_audit(audit)
-        update_state!("policy_audit" => audit.to_h)
-        emit("output_policy.completed", clean: audit.clean?, violation_count: audit.violations.length)
       end
 
       def should_revise?(audit, revisions_used)
@@ -462,8 +573,11 @@ module TurnKit
       end
 
       def count_iteration!
-        budget.count_iteration!
-        update_state!("iterations" => Turn.iterations_for(@record) + 1)
+        store.atomic do
+          @budget = execution_budget
+          budget.count_iteration!
+          update_state!("iterations" => Turn.iterations_for(@record) + 1)
+        end
       end
 
       # Runtime state lives under options["state"]; the rest of options is
@@ -475,7 +589,7 @@ module TurnKit
       end
 
       def heartbeat!
-        update!(heartbeat_at: Clock.now)
+        store.update_turn(id, heartbeat_at: Clock.now)
       end
 
       # Claims a pending turn for a standalone media call. Returns the claimed
@@ -486,7 +600,7 @@ module TurnKit
       def claim_standalone!(action)
         case status
         when "pending"
-          claimed = store.claim_turn(id, from: "pending", to: "running", started_at: Clock.now, heartbeat_at: Clock.now)
+          claimed = Background.claim(store, @record)
           raise Error, "turn is already running" unless claimed
 
           claimed
@@ -516,7 +630,21 @@ module TurnKit
       end
 
       def update!(attributes)
-        @record = store.update_turn(id, attributes)
+        terminal = Background::TERMINAL.include?(attributes[:status])
+        store.atomic(Background.root_conversation(store, @record)) do
+          if terminal
+            if attributes[:status] == "failed" && background?
+              executions = Reconciliation.interrupt_tool_executions(@record, store: store)
+              Reconciliation.repair_transcript(@record, executions, store: store)
+            end
+            attributes = attributes.merge(claim_token: nil)
+          end
+          @record = store.update_turn(id, attributes)
+          # The terminal write clears this execution's claim token, so durable
+          # callback work must use the unfenced store after that write.
+          Background.callback_after_terminal(@base_store, @record) if terminal && background?
+          Background.wake(conversation.id, store: @base_store) if terminal && background?
+        end
         @started_at = @record["started_at"]
         @model = @record["model"] || agent.effective_model
         @record
@@ -535,5 +663,8 @@ module TurnKit
       @turn = turn
       @execution = execution
     end
+
+    def idempotency_key = "turnkit:tool:#{execution.id}"
+    def principal = turn.store.load_turn(turn.id).dig("options", "principal")
   end
 end

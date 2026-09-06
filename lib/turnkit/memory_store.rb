@@ -1,15 +1,40 @@
 # frozen_string_literal: true
 
+require "monitor"
+
 module TurnKit
   class MemoryStore < Store
     def initialize
-      @mutex = Mutex.new
+      @mutex = Monitor.new
       @conversations = {}
       @turns = {}
       @messages = {}
       @tool_executions = {}
+      @deliveries = {}
+      @delivery_keys = {}
+      @waits = {}
       @message_sequences = Hash.new(0)
+      @transaction_depth = 0
     end
+
+    def atomic(_conversation_id)
+      @mutex.synchronize do
+        snapshot = Marshal.dump([@conversations, @turns, @messages, @tool_executions, @deliveries, @delivery_keys, @waits, @message_sequences]) if @transaction_depth.zero?
+        @transaction_depth += 1
+        committed = false
+        begin
+          result = yield
+          committed = true
+          result
+        ensure
+          @transaction_depth -= 1
+          if snapshot && !committed
+            @conversations, @turns, @messages, @tool_executions, @deliveries, @delivery_keys, @waits, @message_sequences = Marshal.load(snapshot)
+          end
+        end
+      end
+    end
+    def atomic_graph(&block) = atomic(nil, &block)
 
     def create_conversation(attributes)
       record = Record.conversation(attributes)
@@ -89,6 +114,86 @@ module TurnKit
       end
     end
 
+    def list_submitted_turns(limit: nil)
+      @mutex.synchronize do
+        rows = @turns.values.select { |turn| turn["submitted_at"] }.sort_by { |turn| [ turn["created_at"].to_f, turn["id"] ] }
+        rows = rows.first(limit) if limit
+        rows.map { |turn| duplicate(turn) }
+      end
+    end
+
+    def list_actionable_turns(limit:)
+      @mutex.synchronize do
+        @turns.values.select { |turn| turn["submitted_at"] && %w[pending waiting running].include?(turn["status"]) }
+          .sort_by { |turn| [ turn["updated_at"].to_f, turn["id"] ] }.first(limit).map { |turn| duplicate(turn) }
+      end
+    end
+
+    def list_stale_inline_turns(before:, limit:)
+      @mutex.synchronize do
+        @turns.values.select { |row| !row["submitted_at"] && %w[pending running].include?(row["status"]) &&
+          (row["heartbeat_at"] || row["started_at"] || row["created_at"]) < before }
+          .sort_by { |row| [row["updated_at"].to_f, row["id"]] }.first(limit).map { |row| duplicate(row) }
+      end
+    end
+
+    def create_delivery(attributes)
+      record = Record.delivery(attributes)
+      @mutex.synchronize do
+        existing_id = @delivery_keys[record.fetch("key")]
+        if existing_id
+          existing = @deliveries.fetch(existing_id)
+          Record.assert_delivery_retry!(existing, record)
+          return duplicate(existing)
+        end
+
+        @deliveries[record.fetch("id")] = record
+        @delivery_keys[record.fetch("key")] = record.fetch("id")
+        duplicate(record)
+      end
+    end
+
+    def load_delivery(id)
+      @mutex.synchronize { duplicate(@deliveries.fetch(id)) }
+    end
+
+    def update_delivery(id, attributes)
+      attrs = Record.delivery_update(attributes)
+      @mutex.synchronize do
+        @deliveries.fetch(id).merge!(attrs)
+        duplicate(@deliveries.fetch(id))
+      end
+    end
+
+    def list_deliveries(source_conversation_id: nil, destination_conversation_id: nil, pending: false, limit: nil)
+      @mutex.synchronize do
+        rows = @deliveries.values
+        rows = rows.select { |row| row["source_conversation_id"] == source_conversation_id } if source_conversation_id
+        rows = rows.select { |row| row["destination_conversation_id"] == destination_conversation_id } if destination_conversation_id
+        rows = rows.select { |row| row["delivered_at"].nil? } if pending
+        rows = rows.sort_by { |row| [ row["created_at"].to_f, row["id"] ] }
+        rows = rows.first(limit) if limit
+        rows.map { |row| duplicate(row) }
+      end
+    end
+
+    def create_wait(turn_id:, target_turn_id:)
+      @mutex.synchronize do
+        wait = { "turn_id" => turn_id, "target_turn_id" => target_turn_id }
+        @waits[[ turn_id, target_turn_id ]] ||= wait
+        duplicate(@waits.fetch([ turn_id, target_turn_id ]))
+      end
+    end
+
+    def list_waits(turn_id: nil, target_turn_id: nil)
+      @mutex.synchronize do
+        rows = @waits.values
+        rows = rows.select { |row| row["turn_id"] == turn_id } if turn_id
+        rows = rows.select { |row| row["target_turn_id"] == target_turn_id } if target_turn_id
+        rows.map { |row| duplicate(row) }
+      end
+    end
+
     def create_tool_execution(attributes)
       record = Record.tool_execution(attributes)
 
@@ -120,17 +225,6 @@ module TurnKit
       end
     end
 
-    def reconcile_stale_turns(before:)
-      @mutex.synchronize do
-        @turns.values.filter_map do |turn|
-          next unless %w[pending running].include?(turn["status"]) && stale_anchor(turn) && stale_anchor(turn) < before
-
-          turn.merge!("status" => "stale", "completed_at" => Clock.now, "updated_at" => Clock.now)
-          duplicate(turn)
-        end
-      end
-    end
-
     private
       def stringify(hash)
         hash.transform_keys(&:to_s)
@@ -140,8 +234,5 @@ module TurnKit
         Marshal.load(Marshal.dump(value))
       end
 
-      def stale_anchor(turn)
-        turn["heartbeat_at"] || turn["started_at"] || turn["created_at"]
-      end
   end
 end

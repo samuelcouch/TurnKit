@@ -2,5 +2,6 @@
 /pkg/
 *.gem
 /checksums/
-/Gemfile.lock
 /.amp/portals/
+/examples/durable_research/log/
+/examples/durable_research/tmp/

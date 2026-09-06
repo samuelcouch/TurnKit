@@ -1,5 +1,62 @@
 # Upgrade Guide
 
+## 0.6.0: Runtime hardening
+
+Configure global context/skills at boot, before constructing agents; defaults are now
+snapshotted. Use agent-scoped `context_contributors:` and run-scoped `context:` for requests.
+Specialist factories disable global inheritance and validate read-only skill tools.
+Skill-owned tools activate only after successful loading in the current turn.
+
+Configure `TurnKit.authorization_policy` and pass authenticated `principal:` values for
+multi-user applications. The default remains trusted application code. Submitted cancellation
+is terminal and fenced, with explicit `descendants: :retain` or `:cascade` semantics.
+
+PostgreSQL is required for ActiveRecord wait-graph locking. Custom stores must implement
+atomic graph operations and bounded actionable queries. Earlier durable-schema adopters
+need the two indexes in [runtime hardening](docs/runtime-hardening.md); new install/upgrade
+migrations already contain them. That guide also documents stable tool idempotency keys,
+opt-in replay safety and the limits of external-effect recovery.
+
+Delivery key reuse with different routing or payload now raises `ToolError` instead of
+returning the original message. Implicit subagent joins honor `:wait` policy. Cycle
+checks conservatively include all unfinished turns in a conversation's serial lane.
+Custom stores also need `list_stale_inline_turns(before:, limit:)`; public inline
+reconciliation now drains bounded batches rather than all history in one call.
+
+## 0.6.0: Durable background execution
+
+Stop existing workers before upgrading: older workers do not respect claim
+fencing. Generate and apply the additive migration, then restart the application
+and workers together:
+
+```sh
+bin/rails generate turnkit:upgrade
+bin/rails db:migrate
+```
+
+Use `--table-prefix your_prefix` if your installation uses custom table names.
+The generator adds delivery/wait models and a reversible migration; it does not
+replace existing models or delete conversation history. For custom model names,
+pass `delivery_class:` and `wait_class:` to `ActiveRecordStore` alongside the
+existing model-class options.
+
+Background execution requires Active Job 7.2+ with a persistent queue adapter,
+agent registration at boot in every worker, and a recurring
+`TurnKit::ReconcileJob`. See [background execution](README.md#background-execution-and-agent-messaging)
+for examples and operational semantics. `async: true` does not enqueue work.
+
+Custom stores need reentrant, rollback-capable `atomic(conversation_id)` with
+cross-process locking for durable use, submitted-turn queries, delivery CRUD
+with a unique idempotency key, and idempotent wait relations. Turn statuses now
+include `waiting`; turn records carry `submitted_at` and `claim_token`.
+The base store implements inline stale reconciliation using these primitives.
+
+Do not rely on a late worker overwriting a reconciled stale turn. Its claim is
+now revoked. Execution-owned writes must go through `context.turn.store`, not a
+global/raw store. Background limits are rooted in persisted run configuration;
+timeout includes queue and wait time after submission. Inline use needs no job
+backend, but ActiveRecord schemas and custom store contracts still need updating.
+
 ## 0.4.2
 
 TurnKit 0.4.2 is a pre-1.0 surface cleanup. Update these call sites before upgrading:

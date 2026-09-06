@@ -72,6 +72,8 @@ class MediaTest < Minitest::Test
       provider: :gemini,
       size: "1024x576",
       assume_model_exists: true,
+      input_images: [ "reference.png" ],
+      mask: "mask.png",
       metadata: { article_id: 1 }
     )
 
@@ -79,6 +81,8 @@ class MediaTest < Minitest::Test
     assert_equal "image-model", calls.first.fetch(:model)
     assert_equal :gemini, calls.first.fetch(:provider)
     assert_equal "1024x576", calls.first.fetch(:size)
+    assert_equal [ "reference.png" ], calls.first.fetch(:with)
+    assert_equal "mask.png", calls.first.fetch(:mask)
     assert result.image?
     assert_equal "image", result.images.first.to_blob
     assert_equal "resolved-image-model", result.images.first.model
@@ -182,6 +186,42 @@ class MediaTest < Minitest::Test
     assert_equal :gemini, client.calls.last.fetch(:provider)
     assert run.messages.any?(&:image?)
   end
+  def test_image_tool_forwards_references_and_mask_and_retains_generated_bytes
+    tool = Class.new(TurnKit::ImageTool) do
+      tool_name "edit_image"
+      model "image-model"
+      parameter :reference, :string, required: true
+      parameter :mask_path, :string, required: true
+
+      def prompt(**)
+        "Edit the reference"
+      end
+
+      def input_images(reference:, **)
+        [ reference ]
+      end
+
+      def mask(mask_path:, **)
+        mask_path
+      end
+    end
+    image = TurnKit::ImageResult.new(data: Base64.strict_encode64("edited-png"), mime_type: "image/png")
+    client = FakeClient.new(
+      TurnKit::Result.new(tool_calls: [ TurnKit::ToolCall.new(id: "edit", name: "edit_image", arguments: { reference: "reference.png", mask_path: "mask.png" }) ]),
+      TurnKit::Result.new(parts: [ image.to_h.merge("type" => "image") ]),
+      TurnKit::Result.new(text: "Edited")
+    )
+
+    run = TurnKit::Agent.new(name: "artist", client: client, tools: [ tool ]).run("Edit this image")
+
+    assert run.completed?
+    assert_equal [ "reference.png" ], client.calls[1].fetch(:input_images)
+    assert_equal "mask.png", client.calls[1].fetch(:mask)
+    result = run.turn.tool_executions.first.result
+    assert_equal "edited-png", TurnKit::ImageResult.from_h(result).to_blob
+    assert run.messages.any?(&:image?)
+  end
+
   def test_turn_paint_rejects_image_without_url_or_data
     image = TurnKit::ImageResult.new(model: "image-model")
     client = FakeClient.new(TurnKit::Result.new(parts: [ image.to_h.merge("type" => "image") ], model: "image-model"))

@@ -1,10 +1,10 @@
 # Media Analysis Smoke Test
 
 This example verifies TurnKit's first-class media-analysis path with RubyLLM and
-Gemini 3 Flash.
+Gemini 3.8 Flash.
 
 It uses RubyLLM's Gemini provider model id from the available-models table:
-`gemini-3-flash-preview`. That model is listed with text, image, video, audio,
+`gemini-3.8-flash`. That model is listed with text, image, video, audio,
 and PDF input support plus structured output.
 
 It exercises:

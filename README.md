@@ -548,6 +548,21 @@ end
 
 Require an image before completion with `TurnKit::OutputPolicy.require_image`.
 
+For editing or style references, override `input_images(**arguments)` and
+`mask(**arguments)` in your `ImageTool` subclass, just like `prompt` and
+`metadata`. Both default to `nil` and are forwarded to the image provider.
+Declare the corresponding tool parameters yourself; accepted sources, reference
+limits, and mask support depend on the provider. Local paths must exist on the
+executing worker. Generate only when the application/user requested it; use
+`ViewMediaTool` for inspection, not image generation.
+
+Image results retain URL or base64 bytes, including in tool results. Provider
+URLs may expire: use the event hook above to copy images into application-owned
+storage for durable user-facing links. TurnKit does not host attachments or
+automatically make generated images visually available to the next text model
+call. Base64 tool results also consume prompt space; for large images, prefer a
+custom tool that stores the artifact and returns its application-owned URL.
+
 ### Media analysis
 
 Analyze existing images, PDFs, audio, or video inside a durable turn with
@@ -727,6 +742,161 @@ puts turn.output_text
 
 Use sub-agents for isolated child conversations.
 
+#### Oracle- and Librarian-style specialists
+
+Use ordinary agents, not a second specialist runtime. Give each specialist its
+own model, instructions, description (when the parent should invoke it), and
+explicit tool list, then include it in the parent's `sub_agents`:
+
+- **Oracle:** instructions for a specific unresolved decision, the evidence
+  already checked, constraints, and a recommendation. Supply only scoped
+  read/search tools; the parent owns implementation and verification.
+- **Librarian:** instructions for external repository understanding and a full
+  evidence-backed report. Supply authenticated repository read/search, history,
+  diff, and issue-reading tools appropriate to the application. A role name does
+  not provide GitHub access. Exclude repository and issue mutation tools.
+- **Painter:** use `ImageTool` for an actual image-provider call rather than a
+  text agent pretending to generate an image.
+
+Children receive the explicit `task`, not the parent's conversation history or
+tool list. Their complete final text, structured `output_data`, status/error,
+and conversation/turn IDs return through the parent's matching tool result;
+intermediate child messages remain in the child conversation. Inline calls
+block; background calls use the same durable fan-out/join machinery below.
+
+This is a context boundary, not an OS or credential sandbox. Global context
+contributors and custom clients can supply additional context/capabilities;
+scope those deliberately. Enforce read-only access in the supplied tools and
+credentials, not merely in prompts. Likewise, enforce user approval for image
+generation in application tool exposure/authorization when it is a requirement.
+TurnKit does not ship Amp's private tools, repository service, or attachment host.
+
+### Background execution and agent messaging
+
+Durable background execution uses Active Record/Active Job 7.2+, `ActiveRecordStore`, and a
+persistent backend such as Solid Queue or Sidekiq. Configure the backend in your
+application; TurnKit does not start worker processes. The database owns pending
+work, while jobs are wake-up signals. `MemoryStore` is for inline use and tests.
+
+Existing installations must run `bin/rails generate turnkit:upgrade` and migrate
+before using this version. New installations use `turnkit:install` as usual.
+
+Register agent definitions at application boot **in every web and worker
+process**. Registration also registers configured sub-agents. Names must identify
+the same agent configuration in every process; use Rails `to_prepare` when
+definitions are reloadable. TurnKit persists IDs, model, options, and lineage,
+not Ruby clients, tools, closures, or executable configuration.
+Subject `to_prompt` data is snapshotted in conversation metadata for worker
+reconstruction. Use live-context contributors with application-owned identifiers
+when background turns need freshly loaded domain objects rather than that snapshot.
+
+```ruby
+require "turnkit/job"
+
+writer = TurnKit::Agent.new(name: "writer", instructions: "Draft concise copy.")
+editor = TurnKit.register(TurnKit::Agent.new(
+  name: "editor",
+  sub_agents: [writer],
+  tools: [TurnKit::LaunchAgentTool, TurnKit::SendMessageTool, TurnKit::WaitTool]
+))
+
+run = editor.run("Research and draft the announcement.", async: true)
+run.perform_later
+
+# Another process can reconstruct records using the registered definitions.
+run = TurnKit::Run.new(TurnKit.load_turn(run.id))
+run.reload.status
+```
+
+`async: true` still means **prepare pending work**, not enqueue it. This preserves
+preview-only use. `perform_later` persists submission before enqueueing and
+returns immediately. Background work uses the application-wide `TurnKit.store`.
+Worker clients and tools must be safe for the concurrency configured in your job
+backend. Do not launch unjoined Ruby threads from tools.
+
+In a background turn, a group of consecutive sub-agent tool calls launches
+independent child jobs. The parent becomes `waiting` and releases its worker;
+once all children finish, it resumes with tool results in call order. A failed
+child returns a structured failure, not an implicit parent failure. Ordinary
+tools remain sequential, and terminal tools prevent later calls from running.
+Inline turns use the same engine but execute sub-agents synchronously.
+
+`LaunchAgentTool` starts a configured sub-agent without waiting. Its optional
+`callback: true` requests a completion message in the launching conversation.
+`WaitTool` joins submitted turns without holding a worker. These coordination
+tools are opt-in; the application owns authorization and should expose only
+the destinations/actions appropriate for that agent.
+
+Application code can send messages and request completion callbacks too:
+
+```ruby
+parent = TurnKit.load_conversation(parent_conversation_id)
+child = writer.run("Investigate the issue.", async: true)
+child.perform_later(callback: parent)
+
+parent.send_message(other_conversation_id, "Please check the latest results.",
+  key: "request-123:check-results")
+parent.inbox
+parent.outbox
+
+# Attach dependencies before enqueueing, avoiding a race with an eager worker.
+summary = editor.run("Summarize the joined results.", async: true)
+summary.wait_for(child).perform_later
+```
+
+Delivery keys are globally unique idempotency keys. Retrying the same key returns
+the original delivery; it does not replace its payload. Inbox, outbox, and
+completion callbacks use the same persisted delivery rows. Delivery appends one
+message and records the need for a continuation transactionally. Messages to a
+running or waiting conversation do not change its current input snapshot: they
+are consumed by a later turn. Background turns in one conversation execute
+serially. Use `TurnKit.load_conversation` to address a conversation independently
+of a worker's fenced execution context.
+
+Application-level `wait_for` supplies joined results as turn-local input before
+the first model call. Attach waits only to pending turns. Wait targets must be
+submitted or finished, and must not form dependency cycles. Waiting for unfinished
+work in the same conversation is rejected because execution there is serial.
+
+#### Recovery and operational requirements
+
+Schedule `TurnKit::ReconcileJob` using your backend's recurring-job facility
+(for example every minute). This repairs missed enqueues, undelivered messages,
+ready joins, and abandoned workers. `TurnKit.reconcile_stale!` also recovers
+submitted work while retaining the inline stale-turn behavior described below.
+
+- Claims are fenced: after revocation or completion, an old execution cannot
+  persist another model response, tool result, heartbeat, or completion.
+- Recovery reuses committed model responses and tool results. An interrupted
+  model request may be reissued and charged again by the provider.
+- Started external tool calls without results become `interrupted`, with unknown
+  outcomes. They are **not replayed**. The built-in durable coordination tools can
+  resume using their existing child IDs/delivery keys.
+- Waiting is not a stale heartbeat. Root timeout still applies, including queue
+  and wait time from initial submission. It is a cooperative limit, not a hard
+  process kill. Use provider/tool timeouts for blocking external calls.
+- Root iteration and tool-count limits are reserved under a database lock across
+  parallel children. Spend limits use observed cost; already-running requests can
+  overshoot them.
+- `on_event` remains an inline observation hook, not a durable callback. Background
+  infrastructure exceptions reach the job backend rather than being converted
+  into success. Monitor failed jobs and run reconciliation.
+- TurnKit fences its own persistence, not arbitrary external side effects. Tools
+  should use `context.turn.store` for execution-owned TurnKit writes. External
+  services need their own idempotency keys where appropriate.
+
+The PostgreSQL integration suite exercises real row locks and worker-process
+death. Run it against a dedicated test database:
+
+```sh
+TURNKIT_TEST_DATABASE_URL=postgresql:///turnkit_test bundle exec rake test
+```
+
+It creates/rebuilds only `turnkit_test_*` and `turnkit_upgrade_test_*` test tables.
+Without the variable, database tests explicitly skip. Custom stores must implement
+the transactional `Store` contract, including reentrant `atomic`, deliveries,
+waits, and submitted-turn queries; a mutex alone is not cross-process durability.
+
 ### Context Compaction
 
 Disable compaction:
@@ -791,7 +961,8 @@ process). Run this periodically:
 TurnKit.reconcile_stale!
 ```
 
-Reconciliation atomically marks pending and running turns whose last heartbeat
+For unsubmitted inline work, reconciliation atomically marks pending and running
+turns whose last heartbeat
 is older than `TurnKit.timeout` as `stale`, so it never overwrites a turn that
 was concurrently claimed, heartbeated, or completed. Each stale turn's
 unfinished tool executions become `interrupted`, and a synthetic error tool
@@ -799,10 +970,10 @@ result is appended for any unresolved tool call so the conversation can be
 continued. TurnKit never reruns an interrupted tool — whether its side effect
 happened is unknown, so the continued model is told not to assume either way.
 
-Reconciliation does not cancel or reassign the underlying process. If the
-original worker is still alive (its heartbeats were merely late), it continues
-over the synthetic interrupted result and later replaces `stale` with its
-actual `completed` or `failed` outcome — treat `turn.stale` as provisional.
+Reconciliation revokes the original worker's commit authority. A late worker
+cannot replace `stale` with its own outcome. It does not kill the underlying
+process or undo external side effects. Continue an inline stale conversation
+with a new turn; submitted background work is resumed automatically.
 
 ## Options
 
@@ -877,6 +1048,11 @@ agent = TurnKit::Agent.new(
 
 ## Upgrading
 
+See [runtime hardening](docs/runtime-hardening.md) for scoped context, authorization,
+cancellation, cycle-safe waits, replay-safe effects and bounded maintenance, and
+[specialists and skills](docs/specialists.md) for the extensible Oracle, Librarian
+and Painter factories and skill-owned tools.
+
 See the [0.4.2 Upgrade Guide](UPGRADE_TO_0_4_2.md) for the full API migration checklist.
 
 Rails installs from older versions may need `output_data` for structured output,
@@ -905,6 +1081,12 @@ find lib test examples -type f -name '*.rb' -print0 | xargs -0 ruby -c
 ```
 
 Open a pull request.
+
+## Releasing
+
+Maintainers: follow [the release guide](docs/releasing.md) for RubyGems trusted
+publishing setup, version and lockfile updates, and the explicit tag-push procedure.
+Pushing a `v*` tag triggers tests and publication through the `release` environment.
 
 ## License
 

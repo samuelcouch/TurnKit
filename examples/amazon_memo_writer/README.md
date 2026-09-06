@@ -54,19 +54,23 @@ export PARALLEL_API_KEY=...
 Run the default benchmark:
 
 ```sh
-TURNKIT_MODEL=gpt-5 \
-TURNKIT_THINKING_EFFORT=medium \
+TURNKIT_MODEL=gpt-5.6-sol \
+TURNKIT_THINKING_EFFORT=none \
 bundle exec ruby examples/amazon_memo_writer/amazon_memo_writer.rb
 ```
 
 Pass a different memo request as arguments:
 
 ```sh
-TURNKIT_MODEL=gpt-5 \
-TURNKIT_THINKING_EFFORT=medium \
+TURNKIT_MODEL=gpt-5.6-sol \
+TURNKIT_THINKING_EFFORT=none \
 bundle exec ruby examples/amazon_memo_writer/amazon_memo_writer.rb \
   "Write a memo on whether TurnKit should add a managed evaluations product."
 ```
+
+Sol defaults to `none`: its Chat Completions endpoint rejects reasoning with
+function tools. Other models retain the `medium` default; explicit thinking
+overrides are preserved and must be supported by the selected provider.
 
 The script prints a JSON benchmark block followed by the final memo.
 

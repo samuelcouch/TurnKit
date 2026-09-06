@@ -9,11 +9,34 @@ module TurnKit
   # persistence records. Turnkit::Conversation (a database row) is not
   # TurnKit::Conversation (the domain object).
   class ActiveRecordStore < Store
-    def initialize(conversation_class: "Turnkit::Conversation", turn_class: "Turnkit::Turn", message_class: "Turnkit::Message", tool_execution_class: "Turnkit::ToolExecution")
+    def initialize(conversation_class: "Turnkit::Conversation", turn_class: "Turnkit::Turn", message_class: "Turnkit::Message", tool_execution_class: "Turnkit::ToolExecution", delivery_class: "Turnkit::Delivery", wait_class: "Turnkit::Wait")
       @conversation_class_name = conversation_class
       @turn_class_name = turn_class
       @message_class_name = message_class
       @tool_execution_class_name = tool_execution_class
+      @delivery_class_name = delivery_class
+      @wait_class_name = wait_class
+    end
+
+    def atomic(conversation_id)
+      conversation_class.connection_pool.with_connection do
+        conversation_class.transaction do
+          conversation_class.lock.find_by!(uid: conversation_id)
+          yield
+        end
+      end
+    end
+
+    # Wait-graph mutations use one database-wide transaction lock. PostgreSQL
+    # advisory xact locks serialize opposite edges even when roots differ.
+    def atomic_graph
+      conversation_class.connection_pool.with_connection do |connection|
+        conversation_class.transaction do
+          raise ConfigError, "atomic wait graphs require PostgreSQL" unless connection.adapter_name.match?(/postg/i)
+          connection.execute("SELECT pg_advisory_xact_lock(1414876747)")
+          yield
+        end
+      end
     end
 
     def create_conversation(attributes)
@@ -85,6 +108,8 @@ module TurnKit
         cost: attrs["cost"],
         error: attrs["error"],
         output_text: attrs["output_text"],
+        submitted_at: attrs["submitted_at"],
+        claim_token: attrs["claim_token"],
         started_at: attrs["started_at"],
         heartbeat_at: attrs["heartbeat_at"],
         completed_at: attrs["completed_at"]
@@ -123,6 +148,85 @@ module TurnKit
       scope.order(:created_at, :uid).map { |record| turn_hash(record) }
     end
 
+    def list_submitted_turns(limit: nil)
+      scope = turn_class.where.not(submitted_at: nil).order(:created_at, :uid)
+      scope = scope.limit(limit) if limit
+      scope.map { |record| turn_hash(record) }
+    end
+
+    def list_actionable_turns(limit:)
+      turn_class.where.not(submitted_at: nil).where(status: %w[pending waiting running]).order(:updated_at, :uid).limit(limit).map { |record| turn_hash(record) }
+    end
+
+    def list_stale_inline_turns(before:, limit:)
+      turn_class.where(submitted_at: nil, status: %w[pending running])
+        .where("COALESCE(heartbeat_at, started_at, created_at) < ?", before)
+        .order(:updated_at, :uid).limit(limit).map { |record| turn_hash(record) }
+    end
+
+    def busy_conversation?(id, include_pending: true)
+      turns = turn_class.where(conversation_uid: id)
+      active = turns.where(status: %w[running waiting])
+      active = active.or(turns.where(status: "pending").where.not(submitted_at: nil)) if include_pending
+      active.exists?
+    end
+
+    def next_delivery_trigger(id)
+      consumed = turn_class.where(conversation_uid: id).where.not(status: "pending", submitted_at: nil).maximum(:context_message_sequence).to_i
+      delivered_ids = delivery_class.where(destination_conversation_uid: id).where.not(message_uid: nil).select(:message_uid)
+      message = message_class.where(conversation_uid: id, uid: delivered_ids).where("sequence > ?", consumed).order(sequence: :desc).first
+      message_hash(message) if message
+    end
+
+    def create_delivery(attributes)
+      attrs = Record.delivery(attributes)
+      record = delivery_class.create_or_find_by!(key: attrs.fetch("key")) do |delivery|
+        delivery.uid = attrs.fetch("id")
+        delivery.source_conversation_uid = attrs.fetch("source_conversation_id")
+        delivery.destination_conversation_uid = attrs.fetch("destination_conversation_id")
+        delivery.source_turn_uid = attrs["source_turn_id"]
+        delivery.payload = attrs.fetch("payload")
+        delivery.message_uid = attrs["message_id"]
+        delivery.delivered_at = attrs["delivered_at"]
+        delivery.created_at = attrs.fetch("created_at")
+      end
+      existing = delivery_hash(record)
+      Record.assert_delivery_retry!(existing, attrs)
+      existing
+    end
+
+    def load_delivery(id)
+      delivery_hash(delivery_class.find_by!(uid: id))
+    end
+
+    def update_delivery(id, attributes)
+      record = delivery_class.find_by!(uid: id)
+      record.update!(Record.delivery_update(attributes).transform_keys { |key| key == "message_id" ? "message_uid" : key })
+      delivery_hash(record)
+    end
+
+    def list_deliveries(source_conversation_id: nil, destination_conversation_id: nil, pending: false, limit: nil)
+      scope = delivery_class.all
+      scope = scope.where(source_conversation_uid: source_conversation_id) if source_conversation_id
+      scope = scope.where(destination_conversation_uid: destination_conversation_id) if destination_conversation_id
+      scope = scope.where(delivered_at: nil) if pending
+      scope = scope.order(:created_at, :uid)
+      scope = scope.limit(limit) if limit
+      scope.map { |record| delivery_hash(record) }
+    end
+
+    def create_wait(turn_id:, target_turn_id:)
+      record = wait_class.create_or_find_by!(turn_uid: turn_id, target_turn_uid: target_turn_id)
+      wait_hash(record)
+    end
+
+    def list_waits(turn_id: nil, target_turn_id: nil)
+      scope = wait_class.all
+      scope = scope.where(turn_uid: turn_id) if turn_id
+      scope = scope.where(target_turn_uid: target_turn_id) if target_turn_id
+      scope.order(:id).map { |record| wait_hash(record) }
+    end
+
     def create_tool_execution(attributes)
       attrs = Record.tool_execution(attributes)
       record = tool_execution_class.create!(
@@ -156,23 +260,13 @@ module TurnKit
       tool_execution_class.where(turn_uid: turn_id).order(:created_at, :uid).map { |record| tool_execution_hash(record) }
     end
 
-    def reconcile_stale_turns(before:)
-      scope = turn_class.where(status: %w[pending running]).where("COALESCE(heartbeat_at, started_at, created_at) < ?", before)
-      scope.filter_map do |record|
-        now = Clock.now
-        affected = turn_class
-          .where(id: record.id, status: %w[pending running])
-          .where("COALESCE(heartbeat_at, started_at, created_at) < ?", before)
-          .update_all(status: "stale", completed_at: now, updated_at: now)
-        turn_hash(record.reload) if affected == 1
-      end
-    end
-
     private
       def conversation_class = constantize(@conversation_class_name)
       def turn_class = constantize(@turn_class_name)
       def message_class = constantize(@message_class_name)
       def tool_execution_class = constantize(@tool_execution_class_name)
+      def delivery_class = constantize(@delivery_class_name)
+      def wait_class = constantize(@wait_class_name)
 
       def constantize(name)
         name.to_s.split("::").inject(Object) { |mod, part| mod.const_get(part) }
@@ -192,7 +286,9 @@ module TurnKit
       end
 
       def conversation_hash(record)
-        { "id" => record.uid, "agent_name" => record.agent_name, "model" => record.model, "metadata" => record.metadata || {}, "created_at" => record.created_at, "updated_at" => record.updated_at }
+        { "id" => record.uid, "agent_name" => record.agent_name, "model" => record.model,
+          "subject" => record.subject_type && { "type" => record.subject_type, "id" => record.subject_id },
+          "metadata" => record.metadata || {}, "created_at" => record.created_at, "updated_at" => record.updated_at }
       end
 
       def turn_hash(record)
@@ -202,11 +298,25 @@ module TurnKit
           "root_turn_id" => record.root_turn_uid, "context_message_sequence" => record.context_message_sequence,
           "status" => record.status, "model" => record.model, "options" => record.options || {}, "usage" => record.usage || {},
           "cost" => record.cost, "error" => record.error, "output_text" => record.output_text,
+          "submitted_at" => record.submitted_at, "claim_token" => record.claim_token,
           "started_at" => record.started_at, "heartbeat_at" => record.heartbeat_at, "completed_at" => record.completed_at,
           "created_at" => record.created_at, "updated_at" => record.updated_at
         }
         attrs["output_data"] = record.output_data if record.respond_to?(:output_data)
         attrs
+      end
+
+      def delivery_hash(record)
+        {
+          "id" => record.uid, "source_conversation_id" => record.source_conversation_uid,
+          "destination_conversation_id" => record.destination_conversation_uid, "source_turn_id" => record.source_turn_uid,
+          "key" => record.key, "payload" => record.payload || {}, "message_id" => record.message_uid,
+          "delivered_at" => record.delivered_at, "created_at" => record.created_at
+        }
+      end
+
+      def wait_hash(record)
+        { "turn_id" => record.turn_uid, "target_turn_id" => record.target_turn_uid }
       end
 
       def turn_has_attribute?(name)

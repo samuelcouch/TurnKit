@@ -31,17 +31,23 @@ export ANTHROPIC_API_KEY=...
 Optionally choose a model:
 
 ```sh
-export TURNKIT_MODEL=claude-sonnet-4-5
+export TURNKIT_MODEL=claude-sonnet-5
 ```
 
 Optionally enable provider thinking for models that support it:
 
 ```sh
-export TURNKIT_MODEL=gpt-5-mini
-export TURNKIT_THINKING_EFFORT=low
+export TURNKIT_MODEL=gpt-5.6-sol
+export TURNKIT_THINKING_EFFORT=none
 # or, for providers such as Anthropic:
+export TURNKIT_MODEL=claude-sonnet-5
+unset TURNKIT_THINKING_EFFORT
 export TURNKIT_THINKING_BUDGET=4000
 ```
+
+Sol's tool-calling path requires `none` on Chat Completions and selects it
+automatically when no thinking override is supplied. Explicit effort/budget
+overrides remain unchanged and must be supported by the selected provider.
 
 ## Run
 
@@ -71,7 +77,8 @@ SpecReader should:
 At the end of the run, the script prints the saved source documents and briefs.
 
 If `TURNKIT_MODEL` is not set, the script picks a model based on populated API
-keys, preferring Anthropic, then Google Gemini, then OpenAI.
+keys: `claude-sonnet-5` with `ANTHROPIC_API_KEY`, then `gemini-3.8-flash` with
+`GEMINI_API_KEY`, then `gpt-5.6-sol` with `OPENAI_API_KEY`.
 
 ## How the prompt is organized
 

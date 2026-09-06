@@ -4,23 +4,24 @@ require "yaml"
 
 module TurnKit
   class Skill
-    attr_reader :key, :name, :description, :content
+    attr_reader :key, :name, :description, :content, :tools
 
-    def self.from_file(path, key: nil, name: nil, description: "")
+    def self.from_file(path, key: nil, name: nil, description: "", tools: [])
       content, metadata = parse_file(File.read(path))
       base = File.basename(path, File.extname(path))
-      new(key: key || base, name: name || metadata["name"] || base.tr("_-", " ").split.map(&:capitalize).join(" "), description: description.to_s.empty? ? metadata["description"].to_s : description, content: content)
+      new(key: key || base, name: name || metadata["name"] || base.tr("_-", " ").split.map(&:capitalize).join(" "), description: description.to_s.empty? ? metadata["description"].to_s : description, content: content, tools: tools)
     end
 
     def self.from_directory(path, pattern: "*.md")
       Dir.glob(File.join(path, pattern)).sort.map { |file| from_file(file) }
     end
 
-    def initialize(key:, name:, content:, description: "")
+    def initialize(key:, name:, content:, description: "", tools: [])
       @key = key.to_s
       @name = name.to_s
       @description = description.to_s
       @content = content.to_s
+      @tools = Array(tools).dup.freeze
       raise ArgumentError, "key is required" if @key.empty?
       raise ArgumentError, "name is required" if @name.empty?
       raise ArgumentError, "content is required" if @content.empty?

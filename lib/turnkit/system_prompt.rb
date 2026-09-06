@@ -7,7 +7,7 @@ module TurnKit
     PROMPT_MODES = %i[full minimal task none].freeze
     MODE_SECTIONS = {
       full: DEFAULT_SECTIONS,
-      minimal: %i[agent sub_agent instructions behavior tools environment],
+      minimal: %i[agent sub_agent instructions behavior loaded_skills available_skills tools environment],
       task: DEFAULT_SECTIONS,
       none: []
     }.freeze
@@ -181,7 +181,7 @@ module TurnKit
     end
 
     def tools_section
-      tools = agent.effective_tools
+      tools = agent.effective_tools(turn: turn)
 
       if tools.empty?
         tagged("tools_available", "(none)\n\nNo tools are available for this turn.")
@@ -197,9 +197,7 @@ module TurnKit
     end
 
     def subject_section
-      return nil unless conversation.subject&.respond_to?(:to_prompt)
-
-      value = conversation.subject.to_prompt.to_s.strip
+      value = conversation.subject_prompt.strip
       return nil if value.empty?
 
       untrusted_section(
@@ -211,9 +209,11 @@ module TurnKit
     end
 
     def live_context_section
-      contributions = Array(TurnKit.context_contributors).filter_map do |contributor|
+      contributors = agent.context_contributors
+      contributions = contributors.filter_map do |contributor|
         normalize_context_contribution(contributor.call(prompt_build_context))
       end
+      contributions.unshift(normalize_context_contribution(name: "run_context", content: JSON.generate(turn.context), trusted: false)) unless turn.context.empty?
       return nil if contributions.empty?
 
       body = contributions.map do |contribution|
@@ -280,7 +280,7 @@ module TurnKit
         "stable_chars" => stable.length,
         "dynamic_chars" => dynamic.length,
         "sections" => sections.map(&:to_s),
-        "tool_count" => agent.effective_tools.length
+        "tool_count" => agent.effective_tools(turn: turn).length
       }
     end
 

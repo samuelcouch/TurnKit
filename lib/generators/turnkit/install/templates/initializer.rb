@@ -8,6 +8,11 @@
 #   TurnKit::ActiveRecordStore.new(conversation_class: "My::Conversation", ...)
 TurnKit.store = TurnKit::ActiveRecordStore.new
 
+# Background work: require "turnkit/job", configure a persistent Active Job
+# backend, register agents with TurnKit.register at boot in every process,
+# and schedule TurnKit::ReconcileJob in your recurring-job facility.
+# async: true only prepares a run; perform_later submits it.
+
 # TurnKit.default_model = "claude-sonnet-4-5"
 # TurnKit.max_iterations = 25
 # TurnKit.timeout = 300
