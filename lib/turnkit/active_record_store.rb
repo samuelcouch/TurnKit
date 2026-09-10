@@ -166,7 +166,7 @@ module TurnKit
 
     def busy_conversation?(id, include_pending: true)
       turns = turn_class.where(conversation_uid: id)
-      active = turns.where(status: %w[running waiting])
+      active = turns.where(status: %w[running waiting paused])
       active = active.or(turns.where(status: "pending").where.not(submitted_at: nil)) if include_pending
       active.exists?
     end

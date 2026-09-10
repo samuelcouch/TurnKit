@@ -9,10 +9,13 @@ module TurnKit
     def dispatch(tool_calls)
       waiting = false
       tool_calls.each_with_index do |tool_call, index|
+        control = turn.control_boundary!
+        return control if control
         # Fan out a contiguous group of subagents, but never reorder ordinary
         # tools across it or execute past a terminal tool.
         return :waiting if waiting && !subagent?(tool_for(tool_call.name))
         execution = run(tool_call, defer_result: waiting)
+        return execution if %i[paused steered].include?(execution)
         if execution == :waiting
           waiting = true
           next
@@ -77,11 +80,13 @@ module TurnKit
           Authorization.authorize!(:tool, principal: context.principal, turn: turn, tool: tool, arguments: tool_call.arguments)
           # Observe cancellation/reconciliation immediately before crossing the
           # external-effect boundary. Calls already sent cannot be recalled.
-          turn.store.atomic { true }
+          control = turn.control_boundary!
+          return control if control
           if turn.background? && subagent?(tool)
             return delegate(tool, tool_call, context)
           end
           value = call_tool(tool, tool_call.arguments, context: context)
+          return value if tool == LaunchAgentTool && %i[paused steered waiting].include?(value)
           return :waiting if value == :waiting && tool == WaitTool
           normalize_payload(value)
         rescue LostClaim
@@ -178,6 +183,8 @@ module TurnKit
         TurnKit.resolve_agent(tool.agent.name)
         child = turn.store.atomic_graph do
           turn.store.atomic(Background.root_conversation(turn.store, turn.store.load_turn(turn.id))) do
+            control = turn.control_boundary!
+            next control if control
             row = turn.store.list_turns(root_turn_id: turn.root_turn_id).find { |candidate| candidate["parent_tool_execution_id"] == context.execution.id }
             unless row
               built = tool.build_child(task: arguments.fetch("task"), context: context)
@@ -187,6 +194,7 @@ module TurnKit
             row
           end
         end
+        return child if child.is_a?(Symbol)
         unless Background::TERMINAL.include?(child["status"])
           Background.enqueue(child.fetch("id")) if child["status"] == "pending"
           return :waiting

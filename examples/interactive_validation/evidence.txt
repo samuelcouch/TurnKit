@@ -1,0 +1,1 @@
+Cedar research fixture: debt maturity is 2031; liquidity is 37 million USD.

@@ -52,6 +52,19 @@ module TurnKit
       self
     end
 
+    def pause!(**options)
+      turn.pause!(**options)
+      self
+    end
+
+    def resume!(**options)
+      turn.resume!(**options)
+      self
+    end
+
+    def steer!(text, **options) = turn.steer!(text, **options)
+    def control_state(**options) = turn.control_state(**options)
+
     def reload
       turn.reload
       self

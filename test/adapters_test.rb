@@ -44,14 +44,61 @@ class AdaptersTest < Minitest::Test
     assert_equal false, normalized.fetch("properties").fetch("meta").fetch("additionalProperties")
     assert_equal "string", normalized.fetch("properties").fetch("title").fetch("type")
   end
-  def test_ruby_llm_private_provider_completion_canary
+  def test_ruby_llm_single_completion_api_canary
     require "ruby_llm"
 
-    # TurnKit::Adapters::RubyLLM#complete_without_tool_execution depends on
-    # this private RubyLLM API. If this test fails after a ruby_llm upgrade,
-    # update the adapter.
-    assert ::RubyLLM::Chat.private_method_defined?(:provider_completion),
-      "RubyLLM::Chat#provider_completion is gone; update TurnKit::Adapters::RubyLLM#complete_without_tool_execution"
+    assert ::RubyLLM::Chat.method_defined?(:generate) || ::RubyLLM::Chat.private_method_defined?(:provider_completion),
+      "RubyLLM's single-response API is gone; update TurnKit::Adapters::RubyLLM"
+    chat = Object.new
+    def chat.generate = :single_response
+    def chat.provider_completion = raise("do not call the legacy API when generate exists")
+    assert_equal :single_response, TurnKit::Adapters::RubyLLM.new.send(:complete_without_tool_execution, chat)
+  end
+
+  def test_ruby_llm_responses_preserve_raw_items_through_runtime_and_replay
+    require "ruby_llm"
+    output = [
+      { "type" => "reasoning", "id" => "rs_test", "encrypted_content" => "opaque-fixture", "summary" => [] },
+      { "type" => "message", "id" => "msg_test", "role" => "assistant", "phase" => "final_answer",
+        "content" => [{ "type" => "output_text", "text" => "done", "annotations" => [] }] }
+    ]
+    response = Struct.new(:content, :raw).new("done", Struct.new(:body).new(
+      { "object" => "response", "status" => "completed", "output" => output }))
+    adapter = TurnKit::Adapters::RubyLLM.new
+    result = adapter.send(:normalize_response, response, model: "gpt-6-astra")
+    client = FakeClient.new(result, TurnKit::Result.new(text: "followup"))
+    conversation = TurnKit::Agent.new(name: "replay", client: client, compaction: false).conversation
+    assert_equal "done", conversation.ask("work").output_text
+    conversation.ask("followup")
+    projected = client.calls.last.fetch(:messages).find { |message| message[:role] == :assistant }
+    chat = Object.new
+    def chat.add_message(attributes) = (@attributes = attributes)
+    def chat.attributes = @attributes
+    adapter.send(:add_message, chat, projected, provider: :openai)
+    assert_equal output, chat.attributes.fetch(:raw_content)
+    assert_equal "done", chat.attributes.fetch(:content)
+    assert conversation.messages.any? { |message| message.content.any? { |part| part["type"] == "provider" } }
+    refute conversation.messages_after(0).any? { |message| message.content.any? { |part| %w[provider thinking].include?(part["type"]) } }
+  end
+
+  def test_ruby_llm_2_usage_buckets_are_exclusive_and_model_is_preserved
+    tokens = Struct.new(:input, :output, :cache_read, :cache_write, :thinking).new(87, 47, 19, 7, 31)
+    response = Struct.new(:content, :tokens, :model, :cost).new('{"verdict":"ok"}', tokens, "provider-model", Struct.new(:total).new(0.000321))
+    result = TurnKit::Adapters::RubyLLM.new.send(:normalize_response, response, model: "fallback-model")
+    assert_equal [87, 16, 19, 7, 31, 160], [result.usage.input_tokens, result.usage.output_tokens,
+      result.usage.cached_tokens, result.usage.cache_write_tokens, result.usage.thinking_tokens, result.usage.total_tokens]
+    assert_equal "provider-model", result.model
+    assert_equal 0.000321, result.usage.cost
+    assert_equal({ "verdict" => "ok" }, result.output_data)
+  end
+
+  def test_ruby_llm_incomplete_responses_are_failures_not_partial_publications
+    response = Struct.new(:content, :raw).new("partial", Struct.new(:body).new(
+      { "object" => "response", "status" => "incomplete", "incomplete_details" => { "reason" => "max_output_tokens" } }))
+    error = assert_raises(TurnKit::ModelError) do
+      TurnKit::Adapters::RubyLLM.new.send(:normalize_response, response, model: "gpt-6-astra")
+    end
+    assert_includes error.message, "max_output_tokens"
   end
   def test_ruby_llm_adapter_does_not_execute_turnkit_tools
     require "ruby_llm"
@@ -127,7 +174,7 @@ class AdaptersTest < Minitest::Test
 
     adapter.send(:apply_thinking, chat, { "effort" => :high, "budget" => 4_000 })
 
-    assert_equal "high", chat.thinking.effort
+    assert_equal "high", chat.thinking.effort.to_s
     assert_equal 4_000, chat.thinking.budget
   end
   def test_ruby_llm_adapter_preserves_tool_messages
@@ -183,9 +230,15 @@ class AdaptersTest < Minitest::Test
 
     assert_equal 2, chat.messages.length
     cached_content = chat.messages.first.content
-    assert_instance_of RubyLLM::Content::Raw, cached_content
-    assert_equal "stable", cached_content.value.first.fetch(:text)
-    assert_equal({ type: "ephemeral" }, cached_content.value.first.fetch(:cache_control))
+    if RubyLLM::Chat.method_defined?(:generate)
+      assert_equal "stable", cached_content
+      assert chat.messages.first.cache_until_here?
+      refute chat.messages.last.cache_until_here?
+    else
+      assert_instance_of RubyLLM::Content::Raw, cached_content
+      assert_equal "stable", cached_content.value.first.fetch(:text)
+      assert_equal({ type: "ephemeral" }, cached_content.value.first.fetch(:cache_control))
+    end
     assert_equal "dynamic", chat.messages.last.content
   end
   def test_ruby_llm_adapter_skips_cache_for_non_anthropic_models

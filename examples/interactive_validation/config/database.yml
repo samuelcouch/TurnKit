@@ -1,0 +1,4 @@
+test:
+  adapter: postgresql
+  database: turnkit_interactive_validation
+  pool: 16

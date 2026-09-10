@@ -73,13 +73,13 @@ module TurnKit
       return new unless defined?(::RubyLLM) && model
 
       model_info = ::RubyLLM.models.find(model)
-      tokens = ::RubyLLM::Tokens.new(
-        input: usage.input_tokens,
-        output: usage.output_tokens,
-        cached: usage.cached_tokens,
-        cache_creation: usage.cache_write_tokens,
-        thinking: usage.thinking_tokens
-      )
+      tokens = if ::RubyLLM::Chat.method_defined?(:generate)
+        ::RubyLLM::Tokens.new(input: usage.input_tokens, output: usage.output_tokens + usage.thinking_tokens,
+          cache_read: usage.cached_tokens, cache_write: usage.cache_write_tokens, thinking: usage.thinking_tokens)
+      else
+        ::RubyLLM::Tokens.new(input: usage.input_tokens, output: usage.output_tokens,
+          cached: usage.cached_tokens, cache_creation: usage.cache_write_tokens, thinking: usage.thinking_tokens)
+      end
       from_hash(::RubyLLM::Cost.new(tokens: tokens, model: model_info).to_h)
     rescue ::RubyLLM::ModelNotFoundError
       new

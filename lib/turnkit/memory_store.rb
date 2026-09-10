@@ -58,11 +58,13 @@ module TurnKit
     end
 
     def append_message(attributes)
-      attrs = stringify(attributes)
-      attrs["sequence"] ||= next_message_sequence(attrs.fetch("conversation_id"))
-      message = Record.message(attrs)
-      @mutex.synchronize { @messages[message.fetch("id")] = message }
-      duplicate(message)
+      @mutex.synchronize do
+        attrs = stringify(attributes)
+        attrs["sequence"] ||= next_message_sequence(attrs.fetch("conversation_id"))
+        message = Record.message(attrs)
+        @messages[message.fetch("id")] = message
+        duplicate(message)
+      end
     end
 
     def list_messages(conversation_id, through_sequence: nil, turn_id: nil)

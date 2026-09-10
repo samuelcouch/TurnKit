@@ -30,6 +30,11 @@ module TurnKit
       TurnKit.resolve_agent(agent.name)
       child = nil
       parent.store.atomic do
+        control = parent.control_boundary!
+        if control
+          child = control
+          next
+        end
         existing = parent.store.list_turns(root_turn_id: parent.root_turn_id).find { |row| row["parent_tool_execution_id"] == context.execution.id }
         if existing
           child = existing
@@ -40,6 +45,7 @@ module TurnKit
           child = parent.store.update_turn(built.id, submitted_at: Clock.now, options: options)
         end
       end
+      return child if child.is_a?(Symbol)
       Background.enqueue(child.fetch("id"))
       SubAgentTool.result(child)
     end

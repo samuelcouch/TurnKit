@@ -27,7 +27,7 @@ module TurnKit
 
     # Stores may optimize these continuation queries without loading history.
     def busy_conversation?(id, include_pending: true)
-      list_turns(conversation_id: id).any? { |row| %w[running waiting].include?(row["status"]) || (include_pending && row["submitted_at"] && row["status"] == "pending") }
+      list_turns(conversation_id: id).any? { |row| %w[running waiting paused].include?(row["status"]) || (include_pending && row["submitted_at"] && row["status"] == "pending") }
     end
 
     def next_delivery_trigger(id)

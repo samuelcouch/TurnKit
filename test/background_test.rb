@@ -1,9 +1,13 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require_relative "interactive_controls"
+require_relative "native_provider_replay"
 require "timeout"
 
 class BackgroundTest < Minitest::Test
+  include InteractiveControls
+  include NativeProviderReplay
   class BlockingClient < FakeClient
     attr_reader :entered, :release
 

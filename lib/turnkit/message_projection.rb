@@ -33,7 +33,10 @@ module TurnKit
           { role: :assistant, content: [ CONTEXT_SUMMARY_PREFIX, message.text ].reject(&:empty?).join("\n\n") }
         ]
       else
-        [ to_h ]
+        projected = to_h
+        provider_parts = message.content.select { |part| part["type"] == "provider" }
+        projected[:provider_parts] = provider_parts if provider_parts.any?
+        [ projected ]
       end
     end
 

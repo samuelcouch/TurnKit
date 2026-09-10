@@ -41,11 +41,11 @@ module TurnKit
       store.load_conversation(callback) if callback
       store.atomic(root_conversation(store, store.load_turn(turn.id))) do
         record = store.load_turn(turn.id)
-        raise Error, "only pending turns can be submitted" unless record["status"] == "pending"
+        raise Error, "only pending or paused turns can be submitted" unless %w[pending paused].include?(record["status"])
         options = record.fetch("options")
         options = options.merge("callback_conversation_id" => callback) if callback
         store.update_turn(turn.id, submitted_at: record["submitted_at"] || Clock.now, options: options,
-          status: ready?(store, turn.id) ? "pending" : "waiting")
+          status: record["status"] == "paused" ? "paused" : ready?(store, turn.id) ? "pending" : "waiting")
       end
       enqueue(turn.id)
       turn.reload
@@ -90,7 +90,7 @@ module TurnKit
           next if !state["phase"] && !ready?(store, current.fetch("id")) && !deadline_exceeded?(store, current)
           if current["submitted_at"]
             others = store.list_turns(conversation_id: current.fetch("conversation_id")).reject { |row| row["id"] == current["id"] }
-            next if others.any? { |row| %w[running waiting].include?(row["status"]) }
+            next if others.any? { |row| %w[running waiting paused].include?(row["status"]) }
             first = ([current] + others.select { |row| row["submitted_at"] && row["status"] == "pending" }).min_by { |row| [row["created_at"], row["id"]] }
             next unless first["id"] == current["id"]
           end
@@ -150,7 +150,7 @@ module TurnKit
         message = store.append_message(
           "conversation_id" => destination, "role" => "user", "kind" => "text",
           "text" => delivery.fetch("payload").fetch("text"),
-          "metadata" => { "delivery_id" => delivery.fetch("id"), "source_conversation_id" => delivery["source_conversation_id"], "source_turn_id" => delivery["source_turn_id"] }
+          "metadata" => { "delivery_id" => delivery.fetch("id"), "principal" => delivery.dig("payload", "principal"), "source_conversation_id" => delivery["source_conversation_id"], "source_turn_id" => delivery["source_turn_id"] }
         )
         store.update_delivery(delivery.fetch("id"), message_id: message.fetch("id"), delivered_at: Clock.now)
         wake(destination, store: store)
@@ -242,7 +242,7 @@ module TurnKit
       end
       turns.group_by { |record| record.fetch("conversation_id") }.each do |conversation_id, records|
         next if store.busy_conversation?(conversation_id, include_pending: false)
-        record = records.find { |row| row["status"] == "pending" }
+        record = records.map { |row| store.load_turn(row.fetch("id")) }.find { |row| row["status"] == "pending" }
         if record
           rotated = store.claim_turn(record.fetch("id"), from: "pending", to: "pending")
           enqueue(record.fetch("id")) if rotated

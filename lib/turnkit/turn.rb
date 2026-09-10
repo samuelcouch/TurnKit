@@ -2,6 +2,7 @@
 
 module TurnKit
   class Turn
+    include TurnControls
     STATUSES = Record::TURN_STATUSES
 
     attr_reader :agent, :conversation, :store, :budget, :depth
@@ -77,7 +78,10 @@ module TurnKit
     end
 
     def suspend!
-      update!(status: "waiting", claim_token: nil)
+      store.atomic do
+        reload
+        update!(status: @record.dig("options", "controls", "pause_requested") ? "paused" : "waiting", claim_token: nil)
+      end
     end
 
     # Revokes the local claim. An already-sent remote request cannot be
@@ -292,6 +296,12 @@ module TurnKit
 
       def execute
         loop do
+          control = control_boundary!
+          break if control == :paused
+          if control == :waiting
+            suspend!
+            break
+          end
           @budget = execution_budget
           budget.check!(depth: depth)
           state = @record.dig("options", "state") || {}
@@ -301,6 +311,9 @@ module TurnKit
             TurnKit::Compaction.maybe_compact!(self)
             request = model_request
             emit_model_requested("model.requested", request)
+            control = control_boundary!
+            break if control == :paused
+            next if control
             result = call_client(request)
             cost = Cost.from_usage(result.usage, model: result.model || model)
             store.atomic do
@@ -314,6 +327,8 @@ module TurnKit
           when "tools"
             runner = ToolRunner.new(self)
             terminal = runner.dispatch(Result.new(parts: state.fetch("parts")).tool_calls)
+            break if terminal == :paused
+            next if terminal == :steered
             if terminal == :waiting
               suspend!
               break
@@ -338,7 +353,7 @@ module TurnKit
               emit("output_policy.revision", violation_count: audit.violations.length, attempt: revisions_used + 1)
             else
               complete_with_output(candidate, output_data: state["output_data"], audit: audit)
-              break
+              break unless status == "running"
             end
           end
         end
@@ -383,7 +398,7 @@ module TurnKit
           dynamic_instructions: dynamic_instructions,
           thinking: thinking,
           output_schema: output_schema,
-          metadata: { turn_id: id, conversation_id: conversation.id },
+          metadata: { turn_id: id, conversation_id: conversation.id, request_id: @record.dig("options", "state", "request_id") },
           report: prompt.report
         )
       end
@@ -412,7 +427,22 @@ module TurnKit
       end
 
       def llm_messages
-        MessageProjection.for(TurnKit::Compaction.project(conversation.messages_for_turn(self)))
+        messages = TurnKit::Compaction.project(conversation.messages_for_turn(self))
+        # Delivery time is not application time. A next-turn message can arrive
+        # between an earlier turn's tool call/result or before its steering.
+        # Keep UI sequence order intact, but place each delivery at the frozen
+        # context boundary of its first receiving turn in the provider input.
+        turns = store.list_turns(conversation_id: conversation.id)
+        messages = messages.sort_by do |message|
+          delivery_id = message.metadata["delivery_id"]
+          receiver = if delivery_id
+            turns.find { |row| row.dig("options", "state", "delivery_requests", delivery_id) } ||
+              turns.find { |row| row["context_message_sequence"] >= message.sequence &&
+                (row["submitted_at"] || row["started_at"] || row["id"] == id) }
+          end
+          receiver ? [receiver.fetch("context_message_sequence"), 1, message.sequence] : [message.sequence, 0, 0]
+        end
+        MessageProjection.for(messages)
       end
 
       def emit_model_requested(type, request)
@@ -475,7 +505,7 @@ module TurnKit
           message = conversation.append_message(role: "assistant", kind: "media_analysis", content: result.media_analyses.map { |analysis| analysis.to_h.merge("type" => "media_analysis") }, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
           emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
         else
-          message = conversation.append_message(role: "assistant", kind: "text", text: result.text, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
+          message = conversation.append_message(role: "assistant", kind: "text", content: result.parts, turn_id: id, metadata: { "output_data" => result.output_data }.compact)
           emit("message.created", message_id: message.id, role: message.role, kind: message.kind)
         end
       end
@@ -505,10 +535,14 @@ module TurnKit
         else
           attrs[:status] = "completed"
         end
-        store.atomic(Background.root_conversation(store, @record)) do
+        controlled = store.atomic(Background.root_conversation(store, @record)) do
+          control = control_boundary!
+          next control if control
           update_state!("policy_audit" => audit.to_h) if audit
           update!(attrs)
+          nil
         end
+        return if controlled
         emit("output_policy.completed", clean: audit.clean?, violation_count: audit.violations.length) if audit
 
         if failed?
@@ -576,7 +610,19 @@ module TurnKit
         store.atomic do
           @budget = execution_budget
           budget.count_iteration!
-          update_state!("iterations" => Turn.iterations_for(@record) + 1)
+          request_id = SecureRandom.uuid
+          options = store.load_turn(id).fetch("options")
+          controls = options["controls"] || {}
+          inputs = controls.fetch("inputs", []).map do |input|
+            input["message_id"] && !input["request_id"] ? input.merge("request_id" => request_id) : input
+          end
+          update!(options: options.merge("controls" => controls.merge("inputs" => inputs)))
+          deliveries = options.dig("state", "delivery_requests") || {}
+          conversation.messages_for_turn(self).each do |message|
+            delivery_id = message.metadata["delivery_id"]
+            deliveries[delivery_id] ||= request_id if delivery_id
+          end
+          update_state!("iterations" => Turn.iterations_for(@record) + 1, "request_id" => request_id, "delivery_requests" => deliveries)
         end
       end
 
@@ -584,7 +630,7 @@ module TurnKit
       # write-once turn configuration. Reads fall back to the legacy top-level
       # keys for turns persisted before the split.
       def update_state!(changes)
-        options = @record["options"] || {}
+        options = store.load_turn(id)["options"] || {}
         update!(options: options.merge("state" => (options["state"] || {}).merge(changes)))
       end
 

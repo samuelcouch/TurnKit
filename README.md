@@ -7,6 +7,17 @@
 Build durable Ruby and Rails agents with conversations, runs, orchestrator agents,
 tools, skills, output audits, sub-agents, and persistence.
 
+For interactive long-running work, use `conversation.post(text, key:, principal:)`
+for next-turn input and `turn.steer!(text, key:, principal:)` to revise the active
+plan. `turn.pause!`/`resume!` preserve progress and release background workers;
+use `descendants: :cascade` for a research subtree. See
+[interactive research](docs/interactive-research.md) for exact interruption
+boundaries, durable receipts, approval gates, and Rails integration.
+For GPT-6 Astra tools, opt into the pinned RubyLLM 2 release candidate and
+[Responses protocol](docs/interactive-research.md#gpt-6-astra-and-provider-continuation-state).
+The [live validation app](examples/interactive_validation/README.md) exercises
+these controls with Rails 8.1, PostgreSQL, Sidekiq, and actual Astra/xhigh requests.
+
 ## Installation
 
 Add this line to your application's **Gemfile**:

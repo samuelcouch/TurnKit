@@ -20,6 +20,37 @@ module TurnKit
       append_message(role: "user", kind: "text", text: text, metadata: metadata)
     end
 
+    # Destination-oriented, durable next-turn input. The destination is also
+    # the delivery's source; the application need not create a sender agent.
+    def post(text, key:, principal: nil)
+      Authorization.authorize!(:send_message, principal: principal, source_conversation: id, destination_conversation: id)
+      delivery = store.create_delivery("source_conversation_id" => id, "destination_conversation_id" => id,
+        "key" => key, "payload" => { "text" => text, "principal" => principal })
+      Background.enqueue
+      delivery
+    end
+
+    def messages_after(sequence, principal: nil)
+      Authorization.authorize!(:read_messages, principal: principal, destination_conversation: id)
+      messages.select { |message| message.sequence > sequence }.map do |message|
+        # Provider thinking/signature parts are not application progress.
+        attrs = message.to_h
+        attrs["content"] = Array(attrs["content"]).reject { |part| %w[thinking provider].include?(part["type"]) }
+        Message.new(attrs)
+      end
+    end
+
+    def input_status(delivery_id, principal: nil)
+      Authorization.authorize!(:read_control, principal: principal, destination_conversation: id)
+      delivery = store.load_delivery(delivery_id)
+      raise ArgumentError, "delivery belongs to another conversation" unless delivery["destination_conversation_id"] == id
+      applied = store.list_turns(conversation_id: id).filter_map do |row|
+        request = row.dig("options", "state", "delivery_requests", delivery_id)
+        { "turn_id" => row.fetch("id"), "request_id" => request } if request
+      end.first
+      delivery.merge("application" => applied, "status" => applied ? "applied" : "pending")
+    end
+
     def subject_prompt
       subject.respond_to?(:to_prompt) ? subject.to_prompt.to_s : metadata["turnkit_subject_prompt"].to_s
     end

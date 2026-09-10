@@ -21,6 +21,17 @@ class CostTest < Minitest::Test
     assert_equal 7, usage.to_h.fetch("cache_write_tokens")
     assert_equal 11, usage.to_h.fetch("thinking_tokens")
   end
+  def test_registry_cost_reconstitutes_ruby_llm_2_inclusive_output
+    require "ruby_llm"
+    modern = RubyLLM::Chat.method_defined?(:generate)
+    usage = TurnKit::Usage.new(input_tokens: 87, cached_tokens: 19,
+      output_tokens: modern ? 16 : 47, thinking_tokens: modern ? 31 : 0)
+    cost = TurnKit::Cost.from_ruby_llm(usage, "gpt-4.1-mini")
+
+    # Registry prices: $0.40 input, $1.60 output, $0.10 cached / million.
+    # 87 * .40 + 47 * 1.60 + 19 * .10 = 111.9 microdollars.
+    assert_in_delta 0.0001119, cost.total, 0.000000001
+  end
   def test_turn_aggregates_cache_write_tokens_and_cost
     client = FakeClient.new(TurnKit::Result.new(text: "hello", usage: TurnKit::Usage.new(input_tokens: 2, output_tokens: 3, cached_tokens: 5, cache_write_tokens: 7, cost: 0.01)))
     agent = TurnKit::Agent.new(name: "helper", model: "model-a", client: client)

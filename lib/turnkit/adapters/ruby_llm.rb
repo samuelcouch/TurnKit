@@ -10,9 +10,16 @@ module TurnKit
         openrouter: "OPENROUTER_API_KEY"
       }.freeze
 
+      def initialize(protocol: nil)
+        @protocol = protocol
+      end
+
       def validate!(model:)
         ensure_ruby_llm!
         raise ModelAccessError, "model is required" if model.to_s.empty?
+        if @protocol && !::RubyLLM::Chat.method_defined?(:generate)
+          raise ConfigError, "protocol selection requires RubyLLM 2.0 (currently 2.0.0.rc2)"
+        end
 
         configure_from_environment
         provider = provider_for(model)
@@ -27,13 +34,18 @@ module TurnKit
         ensure_ruby_llm!
         configure_from_environment
 
-        chat = ::RubyLLM.chat(model: model)
+        validate!(model: model) if @protocol
+        chat = ::RubyLLM.chat(**{ model: model, protocol: @protocol }.compact)
+        chat.with_provider_options(metadata: metadata.transform_values(&:to_s)) if @protocol == :responses && metadata
         add_instructions(chat, instructions, dynamic_instructions, model: model)
         chat.with_temperature(temperature) if temperature
         apply_thinking(chat, thinking)
         chat.with_schema(normalize_schema(output_schema)) if output_schema
-        Array(tools).each { |tool| chat.with_tool(ruby_llm_tool(tool)) }
-        Array(messages).each { |message| add_message(chat, message) }
+        Array(tools).each do |tool|
+          chat.respond_to?(:with_tool) ? chat.with_tool(ruby_llm_tool(tool)) : chat.with_tools(ruby_llm_tool(tool))
+        end
+        tool_names = {}
+        Array(messages).each { |message| add_message(chat, message, provider: chat.model.provider, tool_names: tool_names) }
 
         response = complete_without_tool_execution(chat)
         normalize_response(response, model: model)
@@ -56,7 +68,7 @@ module TurnKit
           size: size || "1024x1024",
           with: input_images,
           mask: mask,
-          params: params || {}
+          **{ (::RubyLLM::Chat.method_defined?(:generate) ? :provider_options : :params) => params || {} }
         )
         normalize_image_response(image, model: model, provider: provider, params: { "size" => size || "1024x1024" }.merge(params || {}), metadata: metadata)
       rescue ConfigError
@@ -69,13 +81,24 @@ module TurnKit
         ensure_ruby_llm!
         configure_from_environment
         media_input = MediaInput.wrap(media)
-        content = ::RubyLLM::Content.new(objective.to_s)
-        content.add_attachment(media_input.attachment_source, filename: media_input.filename)
 
         chat = ::RubyLLM.chat(model: model)
         chat.with_schema(normalize_schema(output_schema)) if output_schema
-        chat.with_params(**params) if params && !params.empty?
-        chat.add_message(role: :user, content: content)
+        if params && !params.empty?
+          if ::RubyLLM::Chat.method_defined?(:generate)
+            chat.with_provider_options(**params)
+          else
+            chat.with_params(**params)
+          end
+        end
+        if ::RubyLLM::Chat.method_defined?(:generate)
+          attachment = ::RubyLLM::Attachment.new(media_input.attachment_source, filename: media_input.filename)
+          chat.add_message(role: :user, content: objective.to_s, attachments: [attachment])
+        else
+          content = ::RubyLLM::Content.new(objective.to_s)
+          content.add_attachment(media_input.attachment_source, filename: media_input.filename)
+          chat.add_message(role: :user, content: content)
+        end
 
         response = complete_without_tool_execution(chat)
         normalize_media_analysis_response(response, media: media_input, model: model, provider: provider, params: params || {}, metadata: metadata)
@@ -133,12 +156,10 @@ module TurnKit
           end
         end
 
-        # RubyLLM has no public API to request a completion without executing
-        # tool calls, so this depends on the private RubyLLM::Chat#provider_completion
-        # (added in ruby_llm 1.16). TurnKit must run tools itself (to persist
-        # executions and enforce budgets). Guarded by a canary test in the
-        # suite; revisit when RubyLLM exposes a public equivalent.
+        # 2.0's public generate requests one completion without executing tools.
+        # 1.16 needs its private provider_completion, guarded by a canary test.
         def complete_without_tool_execution(chat)
+          return chat.generate if chat.respond_to?(:generate)
           unless chat.respond_to?(:provider_completion, true)
             raise ConfigError, "TurnKit::Adapters::RubyLLM requires ruby_llm >= 1.16 (RubyLLM::Chat#provider_completion not found)"
           end
@@ -146,15 +167,31 @@ module TurnKit
           chat.send(:provider_completion)
         end
 
-        def add_message(chat, message)
+        def add_message(chat, message, provider: nil, tool_names: {})
           role = (message[:role] || message["role"]).to_sym
           content = message[:content] || message["content"] || ""
+          kind = { "openai" => "openai_responses", "anthropic" => "anthropic", "gemini" => "gemini" }[provider.to_s]
+          replay = Array(message[:provider_parts] || message["provider_parts"]).find { |part| part["kind"] == kind } if kind
+          calls = ruby_llm_tool_calls(message[:tool_calls] || message["tool_calls"])
+          raw_content = replay&.fetch("data")
+          if raw_content && %w[anthropic gemini].include?(kind) && !::RubyLLM::Chat.method_defined?(:generate)
+            content = ::RubyLLM::Content::Raw.new(raw_content)
+            raw_content = nil
+            if kind == "gemini"
+              # 1.16 appends normalized calls after Raw content. Omit those
+              # duplicates and supply names for its positional function results.
+              calls&.each { |id, call| tool_names[id] = call.name }
+              calls = nil
+            end
+          end
+          call_id = message[:tool_call_id] || message["tool_call_id"]
           chat.add_message(
             {
               role: role,
               content: content,
-              tool_calls: ruby_llm_tool_calls(message[:tool_calls] || message["tool_calls"]),
-              tool_call_id: message[:tool_call_id] || message["tool_call_id"]
+              raw_content: raw_content,
+              tool_calls: calls,
+              tool_call_id: tool_names.fetch(call_id, call_id)
             }.compact
           )
         end
@@ -176,6 +213,10 @@ module TurnKit
           content = content.to_s.strip
           return if content.empty?
 
+          if ::RubyLLM::Chat.method_defined?(:generate)
+            chat.add_message(role: :system, content: content, cache_until_here: cache)
+            return
+          end
           if cache
             content = ::RubyLLM::Providers::Anthropic::Content.new(content, cache: true)
           end
@@ -207,7 +248,7 @@ module TurnKit
           Class.new(::RubyLLM::Tool) do
             define_singleton_method(:name) { tool.tool_name }
             description tool.description
-            params tool.input_schema
+            respond_to?(:params) ? params(tool.input_schema) : parameters(tool.input_schema)
 
             define_method(:execute) do |**arguments|
               raise ToolError, "tools must be executed by TurnKit turns, not the RubyLLM adapter"
@@ -216,6 +257,10 @@ module TurnKit
         end
 
         def normalize_response(response, model:)
+          raw = response.raw.body if response.respond_to?(:raw) && response.raw.respond_to?(:body)
+          if raw.is_a?(Hash) && raw["object"] == "response" && raw["status"] != "completed"
+            raise ModelError, "OpenAI Responses #{raw['status']}: #{raw.dig('incomplete_details', 'reason')}"
+          end
           tool_calls = Array(response.respond_to?(:tool_calls) ? response.tool_calls&.values : []).map do |call|
             ToolCall.new(id: call.id, name: call.name, arguments: call.arguments)
           end
@@ -233,7 +278,7 @@ module TurnKit
             output_data: response_data(response),
             tool_calls: tool_calls,
             usage: usage,
-            model: response.respond_to?(:model_id) ? response.model_id : model
+            model: response_model(response, model)
           )
         end
 
@@ -248,6 +293,14 @@ module TurnKit
             text = content.to_s
             text.empty? ? [] : [ { "type" => "text", "text" => text } ]
           end.compact
+          raw = response.raw.body if response.respond_to?(:raw) && response.raw.respond_to?(:body)
+          if raw.is_a?(Hash) && raw["object"] == "response"
+            parts << { "type" => "provider", "kind" => "openai_responses", "data" => raw.fetch("output") }
+          elsif raw.is_a?(Hash) && raw["type"] == "message" && raw["role"] == "assistant"
+            parts << { "type" => "provider", "kind" => "anthropic", "data" => raw.fetch("content") }
+          elsif raw.is_a?(Hash) && raw.dig("candidates", 0, "content", "parts")
+            parts << { "type" => "provider", "kind" => "gemini", "data" => raw.dig("candidates", 0, "content", "parts") }
+          end
           parts + Array(tool_calls).map { |call| { "type" => "tool_call", "id" => call.id, "name" => call.name, "arguments" => call.arguments } }
         end
 
@@ -281,7 +334,25 @@ module TurnKit
         end
 
         def token_value(response, method)
-          response.respond_to?(method) ? response.public_send(method).to_i : 0
+          if response.respond_to?(method)
+            value = response.public_send(method).to_i
+            raw = response.raw.body if response.respond_to?(:raw) && response.raw.respond_to?(:body)
+            native = raw.is_a?(Hash) && (raw["candidates"] || raw["type"] == "message")
+            # Native 1.16 providers also include thinking in their output count.
+            return native && method == :output_tokens ? value - thinking_token_value(response) : value
+          end
+          return 0 unless response.respond_to?(:tokens)
+
+          key = { input_tokens: :input, output_tokens: :output, cached_tokens: :cache_read,
+            cache_creation_tokens: :cache_write, thinking_tokens: :thinking, reasoning_tokens: :thinking }.fetch(method)
+          value = response.tokens.public_send(key).to_i
+          # RubyLLM 2.0 includes thinking in output; TurnKit buckets are additive.
+          method == :output_tokens ? value - response.tokens.thinking.to_i : value
+        end
+
+        def response_model(response, fallback)
+          return response.model if response.respond_to?(:model)
+          response.respond_to?(:model_id) ? response.model_id : fallback
         end
 
         def thinking_token_value(response)
@@ -305,7 +376,7 @@ module TurnKit
             data: image.respond_to?(:data) ? image.data : nil,
             mime_type: image.respond_to?(:mime_type) ? image.mime_type : nil,
             revised_prompt: image.respond_to?(:revised_prompt) ? image.revised_prompt : nil,
-            model: image.respond_to?(:model_id) ? image.model_id : model,
+            model: response_model(image, model),
             provider: provider&.to_s,
             usage: usage,
             params: params,
@@ -327,7 +398,7 @@ module TurnKit
           part = MediaAnalysisResult.new(
             text: response_text(response),
             data: response_data(response),
-            model: response.respond_to?(:model_id) ? response.model_id : model,
+            model: response_model(response, model),
             provider: provider&.to_s,
             usage: usage,
             params: params,
@@ -339,6 +410,7 @@ module TurnKit
         end
 
         def image_usage_value(image, key)
+          return image.tokens.public_send(key == "input_tokens" ? :input : :output).to_i if image.respond_to?(:tokens)
           usage = image.respond_to?(:usage) ? image.usage || {} : {}
           (usage[key] || usage[key.to_sym]).to_i
         end

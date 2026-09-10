@@ -115,6 +115,8 @@ class MediaTest < Minitest::Test
         @params = params
       end
 
+      alias with_provider_options with_params
+
       def add_message(attributes)
         @messages << attributes
       end
@@ -150,9 +152,15 @@ class MediaTest < Minitest::Test
 
     content = fake_chat.messages.first.fetch(:content)
     assert_equal [ "media-model" ], models
-    assert_instance_of RubyLLM::Content, content
-    assert_equal "Review it", content.text
-    assert_equal "header.png", content.attachments.first.filename
+    if RubyLLM::Chat.method_defined?(:generate)
+      assert_instance_of String, content
+      assert_equal "Review it", content
+      assert_equal "header.png", fake_chat.messages.first.fetch(:attachments).first.filename
+    else
+      assert_instance_of RubyLLM::Content, content
+      assert_equal "Review it", content.text
+      assert_equal "header.png", content.attachments.first.filename
+    end
     assert_equal "object", fake_chat.schema.fetch("type")
     assert_equal({ temperature: 0 }, fake_chat.params)
     assert result.media_analysis?

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.0 - 2026-09-10
+
+- Add destination-oriented `Conversation#post`, durable input/request receipts,
+  authorized transcript cursor reads, and cooperative `pause!`, `resume!`, and
+  `steer!` controls on turns/runs, including parent-linked subtree controls.
+- Preserve in-flight results while skipping stale tool proposals before steering;
+  keep paused conversations closed to automatic wake and retain dependency waits.
+- Enqueue newly eligible joined turns in the same maintenance pass, and serialize
+  MemoryStore message insertion with sequence allocation for cursor catchup.
+- Project busy-time deliveries at their receiving turn's context boundary so
+  earlier steering cannot override next-turn input or split prior tool exchanges.
+- Support optional RubyLLM 2.0.0.rc2 with `protocol: :responses`, opaque provider
+  replay, single-response `generate`, and updated usage/media APIs. Keep RubyLLM
+  1.16 compatibility and the stable development dependency; no separate HTTP
+  adapter or tool executor. Add live Astra/xhigh Rails 8.1/Sidekiq validation.
+- Preserve complete native Anthropic/Gemini thinking/tool blocks across durable
+  reload, steering and recovery, without exposing opaque state in UI/activity.
+  Avoid duplicate raw Gemini calls and double-counted native thinking on 1.16;
+  validate Claude Opus 4.8/high and Gemini 3.1 Pro/high on both SDK versions.
+- No migration on the 0.6.0 schema. Add `paused` to application/custom-store status
+  handling and upgrade workers together before enabling controls. Existing
+  delivery retry payloads remain compatible. See `docs/interactive-research.md`.
+
 ## 0.6.0 - 2026-09-06
 
 ### Added

@@ -4,7 +4,9 @@ module TurnKit
   # The adapter contract. TurnKit calls clients with the full keyword
   # signatures below. Custom adapters should subclass TurnKit::Client (or
   # accept the same keywords) and must not execute tools themselves; TurnKit
-  # runs tools and persists their results.
+  # runs tools and persists their results. Messages may include :provider_parts
+  # for opaque continuation state from Result parts with type "provider".
+  # Adapters should consume only their own provider kind, never display it.
   class Client
     def validate!(model:)
       true

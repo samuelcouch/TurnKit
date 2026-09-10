@@ -1,5 +1,8 @@
 # Runtime hardening
 
+For human next-turn input, steering, cooperative pause/resume, subtree semantics,
+and reconnect reads, see [Interactive background research](interactive-research.md).
+
 ## Implementation plan and boundaries
 
 The seven changes build on existing turns, tools and store transactions rather than a second runtime:
