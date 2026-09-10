@@ -151,6 +151,10 @@ module TurnKit
       options.dig("state", "policy_audit") || options["policy_audit"]
     end
 
+    def budget_completion_call_id
+      @record.dig("options", "state", "budget_completion_call_id")
+    end
+
     # Reads iterations from options["state"], falling back to the legacy
     # top-level key for turns persisted before the state split.
     def self.iterations_for(record)
@@ -188,6 +192,7 @@ module TurnKit
     end
 
     def internal_model_call(model:, messages:, instructions:, tools: [], thinking: nil, output_schema: nil, metadata: {}, purpose:, client: nil)
+      execution_budget.check!(depth: depth)
       request = ModelRequest.new(
         model: model,
         messages: messages,
@@ -303,8 +308,8 @@ module TurnKit
             break
           end
           @budget = execution_budget
-          budget.check!(depth: depth)
           state = @record.dig("options", "state") || {}
+          budget.check!(depth: depth, allow_exhausted_spend: budget_completion_call_id && %w[tools output].include?(state["phase"]))
           case state["phase"] || "model"
           when "model"
             count_iteration!
@@ -320,10 +325,11 @@ module TurnKit
               add_usage!(result.usage, cost: cost)
               persist_assistant_message(result)
               update_state!("phase" => result.tool_calls? ? "tools" : "output", "parts" => result.parts,
-                "candidate" => result.text, "output_data" => result.output_data, "terminal_tool_name" => nil)
+                "candidate" => result.text, "output_data" => result.output_data, "terminal_tool_name" => nil,
+                "budget_completion_call_id" => select_budget_completion(result))
             end
             emit_model_completed("model.completed", result, cost, model: model)
-            budget.add_cost!(cost.total)
+            budget.add_cost!(cost.total) unless budget_completion_call_id
           when "tools"
             runner = ToolRunner.new(self)
             terminal = runner.dispatch(Result.new(parts: state.fetch("parts")).tool_calls)
@@ -344,6 +350,9 @@ module TurnKit
           when "output"
             candidate = state.fetch("candidate")
             audit = check_policy(candidate, output_data: state["output_data"])
+            if budget_completion_call_id && audit && !audit.clean?
+              raise BudgetError, "budget completion rejected: #{audit.messages.join('; ')}"
+            end
             revisions_used = state["revisions_used"].to_i
             if should_revise?(audit, revisions_used)
               store.atomic do
@@ -418,6 +427,7 @@ module TurnKit
 
       # Clients implement the TurnKit::Client keyword contract. See client.rb.
       def call_client(request, client: agent.effective_client)
+        execution_budget.check!(depth: depth)
         client.chat(
           model: request.model,
           messages: request.messages,
@@ -432,11 +442,24 @@ module TurnKit
       end
 
       def call_image_client(client, request)
+        execution_budget.check!(depth: depth)
         with_heartbeat { client.paint(**request, on_event: ->(event) { emit_event(event) }) }
       end
 
       def call_media_client(client, request)
+        execution_budget.check!(depth: depth)
         with_heartbeat { client.view_media(**request, on_event: ->(event) { emit_event(event) }) }
+      end
+
+      def select_budget_completion(result)
+        return unless execution_budget.spend_exhausted?
+
+        tools = agent.effective_tools(turn: self)
+        candidates = result.tool_calls.select do |call|
+          tool = tools.find { |candidate| candidate.tool_name == call.name }
+          tool&.budget_completion? && tool.ends_turn?
+        end
+        candidates.first.id if candidates.length == 1
       end
 
       def llm_messages(include_dynamic_context: false)

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.2 - 2026-09-10
+
+- Add explicit `Tool.budget_completion!` for replay-safe local terminal saves
+  from an already-billed response that reaches the spend limit. Persist the
+  exact eligible call ID with the response; skip other batch calls and preserve
+  ordinary authorization, validation, receipts, fencing and recovery. Ambiguous
+  or failed saves fail without another model request.
+- Treat exact spend exhaustion as a bound and recheck persisted spend before
+  model, media and ordinary tool dispatch. Terminal status alone does not permit
+  over-budget execution; the opt-in does not waive other runtime limits.
+
 ## 0.7.1 - 2026-09-10
 
 - Preserve OpenAI prompt prefixes with durable, append-only dynamic context

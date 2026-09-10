@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    turnkit (0.7.1)
+    turnkit (0.7.2)
 
 GEM
   remote: https://rubygems.org/

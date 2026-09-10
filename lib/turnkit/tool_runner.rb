@@ -7,6 +7,20 @@ module TurnKit
     end
 
     def dispatch(tool_calls)
+      completion_id = turn.budget_completion_call_id
+      if completion_id
+        control = turn.control_boundary!
+        return control if control
+        selected = tool_calls.select { |call| call.id == completion_id }
+        tool = tool_for(selected.first&.name)
+        unless selected.length == 1 && tool&.budget_completion? && tool.ends_turn?
+          raise BudgetError, "budget completion is no longer available"
+        end
+        # Preserve pairing and receipts, regardless of where acquisition calls
+        # appear in the response. Only the durably selected call may execute.
+        skip_remaining(tool_calls - selected, terminal: selected.first)
+        tool_calls = selected
+      end
       waiting = false
       tool_calls.each_with_index do |tool_call, index|
         control = turn.control_boundary!
@@ -24,6 +38,7 @@ module TurnKit
           skip_remaining(tool_calls.drop(index + 1), terminal: tool_call)
           return execution
         end
+        raise BudgetError, "budget completion failed" if completion_id
       end
       waiting ? :waiting : nil
     end
@@ -82,6 +97,7 @@ module TurnKit
           # external-effect boundary. Calls already sent cannot be recalled.
           control = turn.control_boundary!
           return control if control
+          turn.execution_budget.check!(depth: turn.depth, allow_exhausted_spend: turn.budget_completion_call_id == tool_call.id)
           if turn.background? && subagent?(tool)
             return delegate(tool, tool_call, context)
           end
@@ -164,7 +180,8 @@ module TurnKit
         calls.each do |call|
           turn.store.atomic do
             next if turn.store.list_tool_executions(turn_id: turn.id).any? { |row| row["tool_call_id"] == call.id }
-            payload = { "skipped" => true, "message" => "not executed: turn ended by #{terminal.name}" }
+            reason = turn.budget_completion_call_id ? "spend limit reached" : "turn ended by #{terminal.name}"
+            payload = { "skipped" => true, "message" => "not executed: #{reason}" }
             execution = ToolExecution.new(create_execution(call))
             attrs = turn.store.claim_tool_execution(execution.id, from: execution.status, to: "cancelled", result: payload, completed_at: Clock.now)
             append_result_once(ToolExecution.new(attrs), call, payload)

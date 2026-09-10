@@ -67,14 +67,18 @@ module TurnKit
 
       @mutex.synchronize do
         @cost += cost.to_f
-        raise BudgetError, "cost limit reached" if @cost > max_spend
+        raise BudgetError, "cost limit reached" if spend_exhausted?
       end
     end
 
-    def check!(depth:)
+    def spend_exhausted?
+      max_spend && @cost >= max_spend
+    end
+
+    def check!(depth:, allow_exhausted_spend: false)
       raise BudgetError, "maximum sub-agent depth reached" if max_depth && depth > max_depth
       raise BudgetError, "turn timed out" if timeout && Clock.now >= root_started_at + timeout
-      raise BudgetError, "cost limit reached" if max_spend && @cost > max_spend
+      raise BudgetError, "cost limit reached" if spend_exhausted? && !allow_exhausted_spend
     end
 
     private

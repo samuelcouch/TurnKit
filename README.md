@@ -323,6 +323,50 @@ class SaveBrief < TurnKit::Tool
 end
 ```
 
+### Saving an already-billed final response at the spend limit
+
+By default, reaching `max_spend` stops the turn before further work. A model
+response can itself reach or exceed that limit: its usage and proposed tool
+calls are persisted, but an ordinary terminal tool is not allowed to run.
+
+For a **local, idempotent final save only**, explicitly opt in on the tool:
+
+```ruby
+class SavePacket < TurnKit::Tool
+  terminal! { |result| "Saved #{result.fetch('id')}." }
+  recovery :replay_safe
+  budget_completion!
+
+  # Define parameters and call normally. Validate the complete packet before
+  # saving; persist context.idempotency_key with the save in one transaction.
+end
+```
+
+`budget_completion!` requires both terminal behavior and `recovery :replay_safe`.
+It is an application promise that the tool only validates/saves already acquired
+output locally: no model calls, acquisition, or child launches. Terminal status
+alone never grants this exception, and the marker is not inherited implicitly.
+
+When the billed response reaches the spend limit, TurnKit atomically records the
+sole eligible call ID with that response. The normal tool runner executes only
+that call; other calls in the batch get skipped receipts and paired tool results,
+even if they precede the save. Zero or multiple eligible calls fail without tool
+dispatch. No new model request is allowed in the exhausted turn, including
+compaction, model-backed output audits, image generation, or media analysis.
+
+Authorization, argument validation, claim fencing, cancellation, timeout/depth,
+and global/per-tool execution limits still apply. Invalid saves must raise
+`ToolValidationError`/`ToolError`; an ordinary error-shaped hash is still tool
+result data. Failed receipts are never replayed or repaired with another model
+call. Failed local output audits also terminate rather than request revision;
+model-backed audits cannot run at exhaustion. Use local validation for this path.
+
+Worker recovery reuses the persisted call/execution and its idempotency key;
+completed receipts are not re-executed. The application must make the save and
+its receipt atomic. An already-started external effect cannot be recalled by
+cancellation, so this marker must not be applied to acquisition tools. No schema
+migration is needed; upgrade workers together before enabling the opt-in.
+
 ### Output audits and policies
 
 Use output audits for deterministic checks that should not depend on another
@@ -1058,7 +1102,9 @@ TurnKit.timeout = 300
 ```
 
 `max_spend` is the only spend-limit name in the public API.
-
+Spend equal to the limit is exhausted, not just spend above it. Dispatch checks
+use persisted aggregate spend, including after recovery and before internal
+model/media calls. Committed response cost is retained even when the turn fails.
 
 Customize cost rates with USD-per-million-token component keys:
 

@@ -54,6 +54,16 @@ module TurnKit
         @ends_turn || false
       end
 
+      # Explicit application promise: this terminal tool only validates/saves
+      # already acquired output locally, without model calls or acquisition.
+      def budget_completion!
+        @budget_completion = true
+      end
+
+      def budget_completion?
+        @budget_completion || false
+      end
+
       # :unknown is the safe default for external effects. :replay_safe means
       # the application/tool honors ToolContext#idempotency_key on retries.
       def recovery(value = nil)
@@ -79,6 +89,9 @@ module TurnKit
       def validate_definition!
         raise ArgumentError, "tool name is required" if tool_name.empty?
         raise ArgumentError, "invalid tool name: #{tool_name}" unless NAME_PATTERN.match?(tool_name)
+        if budget_completion? && (!ends_turn? || recovery != :replay_safe)
+          raise ArgumentError, "budget_completion! requires a terminal tool with recovery :replay_safe"
+        end
 
         parameters.each do |param|
           type = param.fetch(:type)
@@ -188,6 +201,7 @@ module TurnKit
     def input_schema = self.class.input_schema
     def validate_definition! = self.class.validate_definition!
     def ends_turn? = self.class.ends_turn?
+    def budget_completion? = self.class.budget_completion?
     def completion_message(result) = self.class.completion_message(result)
   end
 end
