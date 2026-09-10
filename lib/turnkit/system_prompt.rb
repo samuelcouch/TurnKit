@@ -92,10 +92,11 @@ module TurnKit
       @sections = Array(sections || prompt_sections_for_mode)
     end
 
-    # The prompt splits into a stable part (identical across turns of the same
-    # agent, safe to cache) and a dynamic part (subject, live context,
-    # environment) recomputed each turn. Adapters that support prompt caching
-    # receive both via ModelRequest#instructions and #dynamic_instructions.
+    # The prompt splits into stable instructions and dynamic data (subject,
+    # live context, environment), recomputed each request. The environment is
+    # anchored at turn.started_at. Clients receive both separately, unless they
+    # opt into durable dynamic-context history. Stable sections can still change
+    # when the agent's tools, skills, or configuration change.
     def stable
       parts.fetch(0).join("\n\n")
     end

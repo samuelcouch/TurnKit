@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 - 2026-09-10
+
+- Preserve OpenAI prompt prefixes with durable, append-only dynamic context
+  snapshots instead of recombining changing data into leading instructions.
+  Deduplicate unchanged snapshots across retries/resume, preserve opaque
+  Responses reasoning and tool pairing, and refresh full context after
+  compaction. Other clients retain the separate-instructions contract.
+- Add the `dynamic_context` message kind (no schema migration; upgrade workers
+  and custom kind allowlists together). Exclude snapshots from public progress
+  reads. Clarify that `prompt_cache: :off` does not disable OpenAI implicit caching.
+
 ## 0.7.0 - 2026-09-10
 
 - Add destination-oriented `Conversation#post`, durable input/request receipts,

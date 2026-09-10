@@ -32,8 +32,8 @@ module TurnKit
 
     def messages_after(sequence, principal: nil)
       Authorization.authorize!(:read_messages, principal: principal, destination_conversation: id)
-      messages.select { |message| message.sequence > sequence }.map do |message|
-        # Provider thinking/signature parts are not application progress.
+      messages.select { |message| message.sequence > sequence && message.kind != "dynamic_context" }.map do |message|
+        # Prompt snapshots and provider thinking are not application progress.
         attrs = message.to_h
         attrs["content"] = Array(attrs["content"]).reject { |part| %w[thinking provider].include?(part["type"]) }
         Message.new(attrs)

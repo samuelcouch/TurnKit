@@ -3,11 +3,13 @@
 require_relative "test_helper"
 require_relative "interactive_controls"
 require_relative "native_provider_replay"
+require_relative "prompt_cache"
 require "timeout"
 
 class BackgroundTest < Minitest::Test
   include InteractiveControls
   include NativeProviderReplay
+  include PromptCache
   class BlockingClient < FakeClient
     attr_reader :entered, :release
 

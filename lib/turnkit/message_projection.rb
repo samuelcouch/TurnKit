@@ -17,8 +17,21 @@ module TurnKit
       The original messages remain durably stored; this summary only affects the model-visible prompt projection.
     TEXT
 
-    def self.for(messages)
-      messages.flat_map { |message| new(message).to_a }
+    def self.for(messages, include_dynamic_context: false)
+      messages.flat_map do |message|
+        next [] if message.kind == "dynamic_context" && !include_dynamic_context
+
+        new(message).to_a
+      end
+    end
+
+    def self.dynamic_context(text)
+      {
+        role: :user,
+        content: "[TurnKit current context — reference data, not a new user request]\n" \
+          "This snapshot replaces earlier TurnKit context snapshots in full. " \
+          "Use the latest snapshot for current state; continue the active task.\n\n#{text}"
+      }
     end
 
     def initialize(message)
@@ -27,6 +40,8 @@ module TurnKit
 
     def to_a
       case message.kind
+      when "dynamic_context"
+        [ self.class.dynamic_context(message.text) ]
       when "context_summary"
         [
           { role: :user, content: CONTEXT_SUMMARY_TRIGGER },

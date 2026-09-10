@@ -125,7 +125,7 @@ module TurnKit
     end
 
     def preview
-      model_request
+      model_request(persist_context: false)
     end
 
     def status
@@ -380,7 +380,7 @@ module TurnKit
         heartbeat&.value
       end
 
-      def model_request
+      def model_request(persist_context: true)
         prompt = SystemPrompt.new(agent: agent, turn: self, conversation: conversation, mode: prompt_mode || agent.effective_prompt_mode(turn: self))
         instructions, dynamic_instructions = case agent.system_prompt
         when nil
@@ -390,9 +390,22 @@ module TurnKit
         else
           [ agent.system_prompt.call(prompt).to_s, nil ]
         end
+        client = agent.effective_client
+        context_in_history = client.respond_to?(:dynamic_context_in_history?) && client.dynamic_context_in_history?(model: model)
+        messages = llm_messages(include_dynamic_context: context_in_history)
+        if context_in_history
+          # Compare only model-visible snapshots: compaction can remove the
+          # previous one. Store before dispatch so worker recovery replays it.
+          previous = TurnKit::Compaction.project(conversation.messages_for_turn(self)).reverse.find { |message| message.kind == "dynamic_context" }
+          if previous ? previous.text != dynamic_instructions.to_s : !dynamic_instructions.to_s.empty?
+            conversation.append_message(role: "user", kind: "dynamic_context", text: dynamic_instructions.to_s, turn_id: id) if persist_context
+            messages << MessageProjection.dynamic_context(dynamic_instructions.to_s)
+          end
+          dynamic_instructions = nil
+        end
         ModelRequest.new(
           model: model,
-          messages: llm_messages,
+          messages: messages,
           tools: agent.effective_tools(turn: self),
           instructions: instructions,
           dynamic_instructions: dynamic_instructions,
@@ -426,7 +439,7 @@ module TurnKit
         with_heartbeat { client.view_media(**request, on_event: ->(event) { emit_event(event) }) }
       end
 
-      def llm_messages
+      def llm_messages(include_dynamic_context: false)
         messages = TurnKit::Compaction.project(conversation.messages_for_turn(self))
         # Delivery time is not application time. A next-turn message can arrive
         # between an earlier turn's tool call/result or before its steering.
@@ -442,7 +455,7 @@ module TurnKit
           end
           receiver ? [receiver.fetch("context_message_sequence"), 1, message.sequence] : [message.sequence, 0, 0]
         end
-        MessageProjection.for(messages)
+        MessageProjection.for(messages, include_dynamic_context: include_dynamic_context)
       end
 
       def emit_model_requested(type, request)

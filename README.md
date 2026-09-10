@@ -463,6 +463,48 @@ agent = TurnKit::Agent.new(
 `TurnKit.prompt_behavior`, and `TurnKit.context_contributors` remain available
 for generated prompts.
 
+### Dynamic context and OpenAI prompt caching
+
+Generated prompts keep stable instructions separate from subject, live context,
+and environment. With the RubyLLM OpenAI adapter (Responses or Chat Completions),
+TurnKit persists each changed **full context snapshot** as a `dynamic_context`
+conversation message before model dispatch. It replays older snapshots unchanged
+and appends new ones after completed tool exchanges. They render as labeled user
+reference-data messages, not new user requests or top-level instructions;
+the newest snapshot replaces earlier snapshots for current state. Keep policies
+in stable instructions and supply current data through context contributors.
+
+Identical snapshots are deduplicated against durable, model-visible history,
+including after retry/resume. Empty context clears a previous snapshot. Changed
+context adds history, so keep contributors concise; compaction can remove old
+snapshots and resets that portion of the prefix. Always supply the full current
+context, not deltas. Changing tools, skills, schemas, model settings, or stable
+instructions can also invalidate a prefix. Existing histories are not rewritten.
+
+Custom clients retain the separate `instructions` / `dynamic_instructions`
+contract. Clients opting into `dynamic_context_in_history?(model:)` receive
+snapshots in `messages` and empty `dynamic_instructions`. Other clients do not
+receive these historical snapshot messages. Raw `Conversation#messages` includes
+them; public `messages_after` progress reads exclude them. No schema migration is
+needed, but custom message-kind allowlists must accept `dynamic_context`, and
+workers reading those conversations must be upgraded together.
+
+Direct `adapter.chat` callers still receive fresh dynamic context at the tail,
+but must preserve prior snapshots themselves (using
+`TurnKit::MessageProjection.dynamic_context(text)` in their own history) and
+avoid supplying the same snapshot again through `dynamic_instructions`.
+A custom `system_prompt:` string/callable is treated entirely as stable
+instructions; recombining `prompt.dynamic` there bypasses this protection.
+
+`TurnKit.prompt_cache = :auto` enables TurnKit's existing Anthropic cache markers;
+`:off` suppresses those markers. It is **not an OpenAI cache-disable switch**.
+OpenAI implicit caching remains provider-default in either setting, including
+when RubyLLM uses `store: false` or a fresh chat object. TurnKit does not force
+explicit breakpoints, cache keys, or TTLs. Matching wire prefixes make reuse
+possible, not guaranteed: eligibility, routing, lifetime, and model-specific
+boundaries still matter. See [OpenAI's prompt-caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
+and measure actual cache reads/writes before claiming savings.
+
 ### Tools
 
 Create a tool:

@@ -12,6 +12,13 @@ module TurnKit
       true
     end
 
+    # Opt in to durable, append-only dynamic context messages. The runtime
+    # then passes empty dynamic_instructions; ordinary clients keep the
+    # existing separate-instructions contract and do not see these messages.
+    def dynamic_context_in_history?(model:)
+      false
+    end
+
     def chat(model:, messages:, tools:, instructions:, dynamic_instructions: nil, temperature: nil, thinking: nil, output_schema: nil, metadata: nil, on_event: nil)
       raise NotImplementedError
     end

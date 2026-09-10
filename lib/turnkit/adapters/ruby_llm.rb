@@ -30,6 +30,18 @@ module TurnKit
         raise ModelAccessError, "#{key_name} is required for #{model}. Set ENV[#{key_name.inspect}] or configure RubyLLM before running TurnKit."
       end
 
+      def dynamic_context_in_history?(model:)
+        ensure_ruby_llm!
+        # Resolve the catalog provider without creating a connection or
+        # requiring credentials, so prompt previews remain offline/read-only.
+        ::RubyLLM.models.find(model).provider.to_s == "openai"
+      rescue ConfigError
+        raise
+      rescue ::RubyLLM::ModelNotFoundError
+        # Preserve unknown-model previews; normal dispatch reports SDK errors.
+        false
+      end
+
       def chat(model:, messages:, tools:, instructions:, dynamic_instructions: nil, temperature: nil, thinking: nil, output_schema: nil, metadata: nil, on_event: nil)
         ensure_ruby_llm!
         configure_from_environment
@@ -37,7 +49,8 @@ module TurnKit
         validate!(model: model) if @protocol
         chat = ::RubyLLM.chat(**{ model: model, protocol: @protocol }.compact)
         chat.with_provider_options(metadata: metadata.transform_values(&:to_s)) if @protocol == :responses && metadata
-        add_instructions(chat, instructions, dynamic_instructions, model: model)
+        context_in_history = chat.model.provider.to_s == "openai"
+        add_instructions(chat, instructions, context_in_history ? nil : dynamic_instructions, model: model)
         chat.with_temperature(temperature) if temperature
         apply_thinking(chat, thinking)
         chat.with_schema(normalize_schema(output_schema)) if output_schema
@@ -46,6 +59,11 @@ module TurnKit
         end
         tool_names = {}
         Array(messages).each { |message| add_message(chat, message, provider: chat.model.provider, tool_names: tool_names) }
+        # The runtime supplies durable snapshots in messages. Direct adapter
+        # callers must preserve this message themselves on subsequent calls.
+        if context_in_history && !dynamic_instructions.to_s.empty?
+          add_message(chat, MessageProjection.dynamic_context(dynamic_instructions))
+        end
 
         response = complete_without_tool_execution(chat)
         normalize_response(response, model: model)
