@@ -39,7 +39,7 @@ module TurnKit
         if existing
           child = existing
         else
-          built = SubAgentTool.for(agent).build_child(task: task, context: context)
+          built = SubAgentTool.for(agent).new.build_child(task: task, context: context)
           options = parent.store.load_turn(built.id).fetch("options")
           options = options.merge("callback_conversation_id" => parent.conversation.id) if callback
           child = parent.store.update_turn(built.id, submitted_at: Clock.now, options: options)

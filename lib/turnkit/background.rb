@@ -264,7 +264,7 @@ module TurnKit
             loaded = Background.load_turn(record.fetch("id"), store: store)
             tool = loaded.agent.effective_tools(turn: loaded).find { |candidate| candidate.tool_name == execution["tool_name"] }
             recovery = tool.is_a?(Class) ? tool.recovery : tool&.class&.recovery
-            ordinary = tool && !(tool.is_a?(Class) && tool < SubAgentTool) &&
+            ordinary = tool && !SubAgentTool.delegates?(tool) &&
               ![WaitTool, LaunchAgentTool, SendMessageTool].include?(tool)
             if ordinary && recovery == :replay_safe
               store.claim_tool_execution(execution.fetch("id"), to: "pending", started_at: nil)

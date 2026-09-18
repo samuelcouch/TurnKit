@@ -93,6 +93,8 @@ module TurnKit
         context = ToolContext.new(turn: turn, execution: execution)
         payload = begin
           Authorization.authorize!(:tool, principal: context.principal, turn: turn, tool: tool, arguments: tool_call.arguments)
+          blocked = tool_policy_block(tool, tool_call.arguments, context)
+          return finish_error(execution, tool_call, blocked, details: { "tool_policy_blocked" => true }) if blocked
           # Observe cancellation/reconciliation immediately before crossing the
           # external-effect boundary. Calls already sent cannot be recalled.
           control = turn.control_boundary!
@@ -191,20 +193,30 @@ module TurnKit
       end
 
       def subagent?(tool)
-        tool.is_a?(Class) && tool < SubAgentTool
+        SubAgentTool.delegates?(tool)
+      end
+
+      # Agent-owned routing/cost policy, distinct from identity authorization.
+      # Returns the block reason the model sees, or nil to proceed.
+      def tool_policy_block(tool, arguments, context)
+        decision, reason = turn.agent.tool_policy&.call(tool: tool, arguments: arguments, context: context)
+        return reason.to_s if decision == :block
+        raise ArgumentError, "tool_policy must return :allow or [:block, reason]" unless [ nil, :allow ].include?(decision)
       end
 
       def delegate(tool, call, context)
-        arguments = tool.validate_arguments(call.arguments)
+        tool = tool.new if tool.is_a?(Class)
+        arguments = tool.class.validate_arguments(call.arguments)
         Authorization.authorize!(:launch_agent, principal: context.principal, turn: turn, agent: tool.agent, arguments: arguments)
         TurnKit.resolve_agent(tool.agent.name)
+        task = tool.task_for(**arguments.transform_keys(&:to_sym))
         child = turn.store.atomic_graph do
           turn.store.atomic(Background.root_conversation(turn.store, turn.store.load_turn(turn.id))) do
             control = turn.control_boundary!
             next control if control
             row = turn.store.list_turns(root_turn_id: turn.root_turn_id).find { |candidate| candidate["parent_tool_execution_id"] == context.execution.id }
             unless row
-              built = tool.build_child(task: arguments.fetch("task"), context: context)
+              built = tool.build_child(task: task, context: context)
               row = turn.store.update_turn(built.id, submitted_at: Clock.now)
             end
             Background.wait(turn, [row.fetch("id")])

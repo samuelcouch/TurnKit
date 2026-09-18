@@ -78,7 +78,8 @@ module TurnKit
 
   def self.register(agent)
     @agents[agent.name] = agent
-    agent.sub_agents.each { |child| register(child) }
+    tools = agent.effective_tools + agent.available_skills.flat_map(&:tools)
+    tools.each { |tool| register(tool.agent) if SubAgentTool.delegates?(tool) }
     agent
   end
 

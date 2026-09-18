@@ -590,6 +590,28 @@ puts turn.output_text
 
 Rely on TurnKit to validate tools and model-provided arguments.
 
+#### Tool policies
+
+Gate tool calls per agent for routing or cost, separately from identity
+authorization:
+
+```ruby
+agent = TurnKit::Agent.new(
+  name: "reporter",
+  tools: [ReadFile, BulkRead],
+  tool_policy: lambda do |tool:, arguments:, context:|
+    next :allow unless tool.is_a?(ReadFile) && File.foreach(arguments["path"]).count > 350
+    [:block, "File is large. Use `bulk_read` with a question, or re-read with `offset`/`limit`."]
+  end
+)
+```
+
+The policy runs after authorization and before the tool executes. Return
+`:allow` (or `nil`) to proceed, or `[:block, reason]` to return the reason to
+the model as a tool error with `details["tool_policy_blocked"] = true`. Keep
+`authorization_policy` for who may call what; use `tool_policy` for how much and
+which way.
+
 ### Images
 
 Generate images inside a durable turn with `turn.paint`. The image call uses the
@@ -838,6 +860,32 @@ puts turn.output_text
 ```
 
 Use sub-agents for isolated child conversations.
+
+#### Typed delegation
+
+Subclass `SubAgentTool` to build the child task from typed arguments so bulk
+data never enters the parent's context:
+
+```ruby
+class BulkRead < TurnKit::SubAgentTool
+  agent reader
+  description "Read files and answer a question about them."
+
+  parameter :question, :string, required: true
+  parameter :paths, :array, required: true, items: :string
+
+  def task_for(question:, paths:)
+    files = paths.map { |path| "<file path=\"#{path}\">\n#{File.read(path)}\n</file>" }
+    "#{question}\n\n#{files.join("\n")}"
+  end
+end
+```
+
+The parent model supplies `question` and `paths`; `task_for` runs inside the
+runtime, and only the child's answer returns to the parent. Override `agent` on
+an instance when the child agent is configured at runtime. Each delegation emits
+`sub_agent.delegated` with `task_chars`, so avoided parent context is
+measurable. See [`examples/shunt`](examples/shunt) for a complete routing setup.
 
 #### Oracle- and Librarian-style specialists
 

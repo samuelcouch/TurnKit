@@ -26,6 +26,9 @@ cases, but they are not part of the core onboarding path.
 6. **Media helpers:** [`media_analysis`](media_analysis) and
    [`image_generation`](image_generation) are focused smoke tests for media input
    analysis and image generation.
+7. **Context routing:** [`shunt`](shunt) keeps bulk file reads and boilerplate
+   writes out of the primary model's context with typed `SubAgentTool`
+   delegation, a `tool_policy` gate, and measured savings.
 
 For a complete live skill/context demonstration, run [`recipe_builder`](recipe_builder):
 high-thinking recipe research, on-demand skill loading, changing injected context,
@@ -48,6 +51,7 @@ alongside an evidence subagent, skeptical review, and cited ideas with experimen
 | `durable_research` | Offline fake by default; live is opt-in | Rails/Postgres/Solid Queue, conversations, messaging, recovery, media | Yes; this is the restart-durability reference |
 | `media_analysis` | Live | Image, PDF, audio, video, and URL analysis path | No; memory-only |
 | `image_generation` | Live | Image generation and image-message persistence path | No; memory-only |
+| `shunt` | Live (offline fake-client tests in `test/shunt_test.rb`) | Typed `SubAgentTool` delegation, `tool_policy` gate, `sub_agent.delegated` savings | No; memory-only |
 
 “Conversation” and “persistence” in the smaller examples describe behavior within
 their in-memory example process; they do not demonstrate survival across a

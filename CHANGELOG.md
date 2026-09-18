@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0 - 2026-09-18
+
+- Add typed delegation to `SubAgentTool`: subclasses declare their own
+  parameters, an `agent` class macro (or instance `agent`), and `task_for` to
+  build the child task inside the runtime so bulk data never enters the parent
+  context. Emit `sub_agent.delegated` with `task_chars` per delegation, and
+  auto-register agents owned by sub-agent tools alongside `sub_agents`.
+- Add `Agent#tool_policy`, a per-agent routing/cost gate that runs after
+  authorization and returns `:allow` or `[:block, reason]`; blocked calls return
+  the reason to the model with `details["tool_policy_blocked"]`.
+- Add `examples/shunt`, a Spotify Portal-style context router with
+  `bulk_read`/`code_write` worker agents, a large-file `read_file` gate, and
+  measured savings.
+- Breaking: `SubAgentTool#build_child` is an instance method, and the `task`
+  parameter is declared only on `SubAgentTool.for` classes.
+
 ## 0.7.2 - 2026-09-10
 
 - Add explicit `Tool.budget_completion!` for replay-safe local terminal saves

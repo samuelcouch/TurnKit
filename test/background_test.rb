@@ -193,6 +193,26 @@ class BackgroundTest < Minitest::Test
     assert results.last.content.first.fetch("error")
   end
 
+  class Summarize < TurnKit::SubAgentTool
+    parameter :topic, :string, required: true
+    def task_for(topic:) = "Summarize #{topic} in one line."
+  end
+
+  def test_background_subagent_tool_builds_task_and_registers_its_agent
+    Summarize.agent(TurnKit::Agent.new(name: "summarizer", client: FakeClient.new(TurnKit::Result.new(text: "one line"))))
+    client = FakeClient.new(calls(["c1", "summarize", { topic: "shunts" }]), TurnKit::Result.new(text: "done"))
+    parent = register("parent", client: client, tools: [Summarize]).run("work", async: true).perform_later
+    assert_same Summarize.agent, TurnKit.resolve_agent("summarizer")
+    TurnKit::Background.perform(parent.id)
+    assert parent.reload.waiting?
+    drain_jobs
+    assert parent.reload.completed?
+    child = parent.child_turn_records.first
+    assert_equal "Summarize shunts in one line.", TurnKit::Message.new(TurnKit.store.list_messages(child.fetch("conversation_id")).first).text
+    result = parent.turn.conversation.messages.find { |message| message.kind == "tool_result" }
+    assert_equal "one line", JSON.parse(result.content.first.fetch("text")).fetch("result")
+  end
+
   def test_recovery_finishes_partially_dispatched_subagent_group
     child = register("child")
     client = FakeClient.new(calls(["first", "child", { task: "a" }], ["second", "child", { task: "b" }]), TurnKit::Result.new(text: "done"))

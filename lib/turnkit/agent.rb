@@ -24,10 +24,10 @@ module TurnKit
     attr_reader :name, :description, :model, :instructions, :tools, :skills, :available_skills, :sub_agents
     attr_reader :client, :store, :max_iterations, :timeout, :max_spend, :max_depth, :max_tool_executions, :max_tool_executions_by_name
     attr_reader :prompt_sections, :system_prompt, :prompt_mode, :thinking, :compaction, :output_schema, :input_schema, :on_event
-    attr_reader :output_policy, :output_policy_mode, :output_policy_model, :output_retries, :context_contributors
+    attr_reader :output_policy, :output_policy_mode, :output_policy_model, :output_retries, :context_contributors, :tool_policy
 
     def initialize(name:, description: "", model: nil, instructions: "", orchestrator: false, tools: [], skills: [], available_skills: [], sub_agents: [],
-      system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
+      tool_policy: nil, system_prompt: nil, prompt_sections: nil, prompt_mode: nil, client: nil, store: nil,
       max_iterations: nil, timeout: nil, max_spend: nil, max_depth: nil, max_tool_executions: nil, max_tool_executions_by_name: nil, thinking: nil, compaction: nil,
       output_schema: nil, input_schema: nil, output_policy: nil, output_policy_mode: nil, output_policy_model: nil, output_policy_thinking: nil, output_retries: 0, on_event: nil, context_contributors: [], inherit_globals: true)
       @name = name.to_s
@@ -39,6 +39,7 @@ module TurnKit
       @skills = Array(skills).dup.freeze
       @available_skills = ((inherit_globals ? Array(TurnKit.available_skills) : []) + Array(available_skills)).uniq { |skill| skill.key }.freeze
       @sub_agents = Array(sub_agents).dup.freeze
+      @tool_policy = tool_policy
       @system_prompt = system_prompt
       @prompt_sections = prompt_sections
       @prompt_mode = prompt_mode&.to_sym || (:task if @orchestrator)
