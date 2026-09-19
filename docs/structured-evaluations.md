@@ -72,6 +72,106 @@ Cloudflare limits borrowed from TypeSafe's direct endpoint. Cloudflare's current
 output schema requires string legend entries even for structured input criteria;
 an incompatible provider response is `malformed`, not silently accepted.
 
+## OpenRouter Jev (Decisions alpha)
+
+`OpenRouterJev` uses **POST https://openrouter.ai/api/alpha/decisions**, with
+`{model, state, questions}` and bearer authentication. It is not the chat endpoint
+and does not use Cloudflare's `input` wrapper. It needs no SDK, RubyLLM model
+registration, new agent harness, or migration. This follows OpenRouter's
+[existing-harness integration guidance](https://github.com/OpenRouterTeam/skills/tree/main/skills/create-agent-tui).
+
+```ruby
+jev = TurnKit::Adapters::OpenRouterJev.new(
+  api_key: ENV.fetch("OPENROUTER_API_KEY"),
+  billing_identity: "desk-production" # Stable non-secret account/workspace label
+)
+# Listed USD/M on 2026-09-19; confirm current pricing. This is an estimate only.
+TurnKit.cost_rates["openrouter/typesafe/jev-1.13"] = { input: 0.042, output: 0 }
+
+audit = lambda do |output, turn:|
+  # Application-owned helpers: locate original quotes in Ruby, bound the context,
+  # and construct per-finding questions. Never call this from an AR callback.
+  context = EvidencePolicy.located_context(output)
+  result = turn.internal_evaluation(
+    evaluator: jev, model: "typesafe/jev-1.13", purpose: :evidence_support,
+    policy_version: "support-v1", candidate: output, state: context,
+    questions: EvidencePolicy.questions(output), max_attempts: 1,
+    before_dispatch: ->(turn:, model:, purpose:) {
+      DeskBudget.check_quality_control!(turn, model: model, purpose: purpose)
+    }
+  )
+  turn.output_metadata = { assessment: "shadow", receipt_id: result.receipt_id,
+    returned_model: result.model, signals: result.answers }
+  nil
+rescue TurnKit::EvaluationError => error
+  turn.output_metadata = { assessment: "unassessed", reason: error.status }
+  nil
+end
+# source_reader: output_policy: audit, output_retries: 1
+```
+
+Use the app's 100% quality-control gate, not its discovery gate. For assist mode,
+replace the successful `nil` with application-calibrated targeted violations only
+after validating the returned model; the existing one-revision lifecycle handles
+repair/reassessment. Leave unavailable evidence explicitly unassessed. Keep the
+generated schema and Astra/Terra/Gemini roles unchanged.
+
+The billing label is persisted in receipt identity, not sent to OpenRouter. Change
+it when the billing account/workspace changes; credential rotation within the same
+account need not invalidate receipts. Never put a credential in this label.
+The identity also includes the exact endpoint and adapter schema version.
+No attribution, routing, trace, user, or session headers/options are sent.
+Account privacy/routing settings remain the application's responsibility; change
+`policy_version` if a policy-relevant account configuration changes.
+
+State/instructions cannot be null on this route. Explicit Noul criteria require
+both true and false descriptions. TurnKit keeps its stricter supported subset:
+Score requires at least two levels and string-valued returned legend entries.
+OpenRouter marks Choice/Score confidence, distributions, and Score legend optional;
+TurnKit deliberately **rejects missing fields as malformed**, rather than
+inventing them or weakening shared answer validation. Extra provider envelope
+fields (including `id` and `provider`) are ignored before closed answer validation;
+requested route and returned model are retained in the existing receipt.
+
+Valid `usage.cost` is preferred over configured rates, including a reported zero.
+Absent cost uses the explicit route-keyed fallback above (or the configured cost
+calculator); without either, cost remains unknown. Malformed answers retain valid
+observed tokens and charges. If token counts themselves are invalid but a valid
+charge is reported, the charge is retained without adding unvalidated tokens.
+HTTP errors also retain reported usage when present. No provider error body is
+logged. Nonretryable 400/401/402/403/404/413 errors are unavailable; 429 and 5xx
+(including 524/529) are eligible for TurnKit's bounded opt-in retries. Transport
+timeouts and 5xx remain uncertain, not zero-cost failures. Default attempts stay 1.
+
+The [model page](https://openrouter.ai/typesafe/jev-1.13) lists 32K context and one
+TypeSafe provider. The [Decisions schema](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-questions-and-answers-request.md)
+shows a dated returned model such as `typesafe/jev-1.13-20260917`; the requested
+family is **not an immutable weights pin**. This alpha transport offers no assumed
+redundant hosting, idempotency, retention/ZDR, or latency guarantees here.
+
+With explicit spending permission and `OPENROUTER_API_KEY` configured server-side:
+
+```sh
+TURNKIT_LIVE_OPENROUTER_JEV=1 bundle exec ruby examples/open_router_jev_smoke.rb
+```
+
+This makes at most **one** small synthetic request with all three primitives,
+checks supported versus unsupported claims and period/basis mismatch, and checks
+receipt replay through a real Turn without another network dispatch. The producing
+chat response is a local fixture. It prints validated answers/model, observed
+usage/charge, fallback cost, semantic check results, and replay status. No paid CI,
+private evidence, alternate provider, or automatic retry is involved. The $0.01
+Turn budget is an admission check, not a provider-side hard cap; the tiny request
+is estimated well below it at listed rates. Do not rerun after an uncertain error
+without checking its outcome. Passing synthetic checks is not semantic calibration
+or evidence of application savings.
+
+Live check on 2026-09-19: one request returned `typesafe/jev-1.13-20260917`,
+578 input tokens, 145 output tokens, and reported cost $0.000024276 (no unknown
+charge). All strict fields were present. Supported/unsupported Noul values were
+0.99/0.02, period was `fy2024`, basis was `adjusted`, and mismatch support score
+was 0. All five synthetic checks passed; receipt replay made no second dispatch.
+
 ## Receipts and accounting
 
 The operation requires an actively owned Turn execution. Calling the adapter
@@ -98,9 +198,10 @@ receipt/attempt IDs, requested/returned model, question count, timing, usage,
 cost, and safe status/HTTP code. They do not include source text or bearer tokens.
 Events are notifications, not a durable exactly-once delivery channel.
 
-The cost lookup key is **`cloudflare/typesafe/jev`**, never the producing agent's
-model or an unrelated RubyLLM model. `TurnKit.cost_calculator` can also price this
-key. Returned model versions are retained separately. Each observed attempt's
+The cost lookup key is **`cloudflare/typesafe/jev`** or
+**`openrouter/typesafe/jev-1.13`**, never the producing agent's model or an unrelated
+RubyLLM model. `TurnKit.cost_calculator` can also price these keys.
+Returned model versions are retained separately. Each observed attempt's
 usage is counted, including a malformed response with valid usage. Unknown usage
 or pricing is not fabricated: attempt `cost` is null, and turn/run/conversation
 `Cost#unknown?` is true with `total == nil` if any evaluation attempt has unknown

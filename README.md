@@ -19,7 +19,7 @@ The [live validation app](examples/interactive_validation/README.md) exercises
 these controls with Rails 8.1, PostgreSQL, Sidekiq, and actual Astra/xhigh requests.
 
 For non-generative judgments, use [structured evaluations](docs/structured-evaluations.md).
-Cloudflare Jev supports Noul, Choice, and Score through a separate typed API with
+Cloudflare and OpenRouter Jev support Noul, Choice, and Score through a separate typed API with
 durable receipts, usage/cost accounting, and output-audit integration—not chat messages.
 
 ## Installation

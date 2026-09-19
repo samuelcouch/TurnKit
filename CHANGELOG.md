@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 - 2026-09-19
+
+- Add `Adapters::OpenRouterJev` for the non-chat Decisions alpha endpoint, reusing
+  evaluation receipts, budgets, and fenced accounting. Prefer reported provider
+  charges and preserve billable malformed responses without weakening typed answers.
+- Document OpenRouter shadow/assist integration and add an opt-in, synthetic
+  one-request smoke test with semantic checks and runtime receipt replay.
+
 ## 0.9.0 - 2026-09-19
 
 - Add `Turn#internal_evaluation` and a dependency-free Cloudflare Jev adapter for
