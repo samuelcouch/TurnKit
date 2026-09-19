@@ -32,6 +32,7 @@ module TurnKit
       def result(record)
         { "conversation_id" => record.fetch("conversation_id"), "turn_id" => record.fetch("id"),
           "status" => record.fetch("status"), "result" => record["output_text"].to_s,
+          "output_metadata" => record.dig("options", "state", "output_metadata"),
           "output_data" => record["output_data"], "error" => record["error"] }.compact
       end
     end

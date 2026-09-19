@@ -3,6 +3,7 @@
 module TurnKit
   class Turn
     include TurnControls
+    include InternalEvaluation
     STATUSES = Record::TURN_STATUSES
 
     attr_reader :agent, :conversation, :store, :budget, :depth
@@ -325,6 +326,7 @@ module TurnKit
               add_usage!(result.usage, cost: cost)
               persist_assistant_message(result)
               update_state!("phase" => result.tool_calls? ? "tools" : "output", "parts" => result.parts,
+                "output_metadata" => nil,
                 "candidate" => result.text, "output_data" => result.output_data, "terminal_tool_name" => nil,
                 "budget_completion_call_id" => select_budget_completion(result))
             end

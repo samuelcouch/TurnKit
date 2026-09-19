@@ -5,6 +5,7 @@ require_relative "interactive_controls"
 require_relative "native_provider_replay"
 require_relative "prompt_cache"
 require_relative "budget_completion"
+require_relative "structured_evaluations"
 require "timeout"
 
 class BackgroundTest < Minitest::Test
@@ -12,6 +13,7 @@ class BackgroundTest < Minitest::Test
   include NativeProviderReplay
   include PromptCache
   include BudgetCompletion
+  include StructuredEvaluations
   class BlockingClient < FakeClient
     attr_reader :entered, :release
 

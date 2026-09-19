@@ -10,6 +10,13 @@ module TurnKit
     def self.aggregate(costs)
       costs = costs.compact
       return new unless costs.any?
+      return new(unknown: true) if costs.any?(&:unknown?)
+      # A provider-supplied total cannot be assigned to a token component.
+      # Preserve it when combining chat totals with itemized evaluation prices.
+      if costs.any? { |cost| cost.total && COMPONENTS.all? { |component| cost.public_send(component).nil? } }
+        totals = costs.map(&:total)
+        return totals.any?(&:nil?) ? new : new(total: totals.sum)
+      end
 
       if costs.any? { |cost| COMPONENTS.any? { |component| !cost.public_send(component).nil? } }
         values = COMPONENTS.to_h do |component|
@@ -41,6 +48,10 @@ module TurnKit
 
     def self.from_record(record)
       attrs = record.transform_keys(&:to_s)
+      evaluations = attrs.dig("options", "state", "evaluations") || {}
+      if evaluations.values.any? { |receipt| receipt.fetch("attempts", []).any? { |attempt| attempt["cost"].nil? } }
+        return new(unknown: true)
+      end
       usage = attrs["usage"] || {}
       return from_hash(usage["cost_details"] || usage[:cost_details]) if usage["cost_details"] || usage[:cost_details]
       return new(total: attrs["cost"]) if attrs["cost"]
@@ -93,7 +104,8 @@ module TurnKit
         cache_read: hash[:cache_read],
         cache_write: hash[:cache_write],
         thinking: hash[:thinking],
-        total: hash[:total]
+        total: hash[:total],
+        unknown: hash[:unknown] || false
       )
     end
 
@@ -120,7 +132,7 @@ module TurnKit
       tokens.to_i * price.to_f / PER_MILLION
     end
 
-    def initialize(input: nil, output: nil, cache_read: nil, cache_write: nil, thinking: nil, total: nil, strict: false)
+    def initialize(input: nil, output: nil, cache_read: nil, cache_write: nil, thinking: nil, total: nil, strict: false, unknown: false)
       @input = number(input)
       @output = number(output)
       @cache_read = number(cache_read)
@@ -128,9 +140,13 @@ module TurnKit
       @thinking = number(thinking)
       @total = number(total)
       @strict = strict
+      @unknown = unknown
     end
 
+    def unknown? = @unknown
+
     def total
+      return nil if unknown?
       return @total if @total
       return nil if @strict && COMPONENTS.any? { |component| public_send(component).nil? }
 
@@ -145,7 +161,8 @@ module TurnKit
         "cache_read" => cache_read,
         "cache_write" => cache_write,
         "thinking" => thinking,
-        "total" => total
+        "total" => total,
+        "unknown" => (true if unknown?)
       }.compact
     end
 

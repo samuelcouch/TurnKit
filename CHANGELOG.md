@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 - 2026-09-19
+
+- Add `Turn#internal_evaluation` and a dependency-free Cloudflare Jev adapter for
+  Noul/Choice/Score judgments, separate from chat. Persist request/attempt receipts
+  with fenced atomic usage/cost accounting and bounded opt-in retries.
+- Add optional runtime-owned `output_metadata` to child results so output-audit
+  callables can report assessments without changing strict generated schemas.
+- Preserve unknown evaluation costs in cost summaries and retain total-only
+  provider charges when aggregating them with itemized costs.
+
 ## 0.8.0 - 2026-09-18
 
 - Add typed delegation to `SubAgentTool`: subclasses declare their own
