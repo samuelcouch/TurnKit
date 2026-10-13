@@ -23,6 +23,11 @@ class AdaptersTest < Minitest::Test
     assert_raises(TurnKit::ModelError) do
       adapter.chat(model: "unknown", messages: [], tools: [], instructions: "")
     end
+    RubyLLM.define_singleton_method(:chat) { |**| raise RubyLLM::ConfigurationError, "invalid protocol" }
+    error = assert_raises(TurnKit::ConfigError) do
+      adapter.chat(model: "gpt-4.1-mini", messages: [], tools: [], instructions: "")
+    end
+    assert_instance_of RubyLLM::ConfigurationError, error.cause
   ensure
     RubyLLM.define_singleton_method(:chat, original_chat) if original_chat
     RubyLLM.define_singleton_method(:paint, original_paint) if original_paint
@@ -74,9 +79,15 @@ class AdaptersTest < Minitest::Test
     chat = Object.new
     def chat.add_message(attributes) = (@attributes = attributes)
     def chat.attributes = @attributes
-    adapter.send(:add_message, chat, projected, provider: :openai)
+    adapter.send(:add_message, chat, projected, provider: :openai, model: "gpt-6-astra")
     assert_equal output, chat.attributes.fetch(:raw_content)
     assert_equal "done", chat.attributes.fetch(:content)
+    adapter.send(:add_message, chat, projected, provider: :openai, model: "gpt-4.1-mini")
+    refute chat.attributes.key?(:raw_content)
+    assert_equal "done", chat.attributes.fetch(:content)
+    TurnKit::Adapters::RubyLLM.new(protocol: :chat_completions).send(:add_message,
+      chat, projected, provider: :openai, model: "gpt-6-astra")
+    refute chat.attributes.key?(:raw_content)
     assert conversation.messages.any? { |message| message.content.any? { |part| part["type"] == "provider" } }
     refute conversation.messages_after(0).any? { |message| message.content.any? { |part| %w[provider thinking].include?(part["type"]) } }
   end

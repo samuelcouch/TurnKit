@@ -13,7 +13,7 @@ plan. `turn.pause!`/`resume!` preserve progress and release background workers;
 use `descendants: :cascade` for a research subtree. See
 [interactive research](docs/interactive-research.md) for exact interruption
 boundaries, durable receipts, approval gates, and Rails integration.
-For GPT-6 Astra tools, opt into the pinned RubyLLM 2 release candidate and
+For GPT-6 Astra tools, use stable RubyLLM 2.1.1 and the
 [Responses protocol](docs/interactive-research.md#gpt-6-astra-and-provider-continuation-state).
 The [live validation app](examples/interactive_validation/README.md) exercises
 these controls with Rails 8.1, PostgreSQL, Sidekiq, and actual Astra/xhigh requests.

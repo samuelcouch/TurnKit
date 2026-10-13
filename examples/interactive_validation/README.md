@@ -13,12 +13,14 @@ requires Responses for Astra tools. Amp agent access is not sufficient: this app
 needs `OPENAI_API_KEY` in the worker's environment.
 
 The existing `TurnKit::Adapters::RubyLLM` explicitly selects `protocol: :responses`
-with **RubyLLM 2.0.0.rc2**, pinned in `Gemfile.ruby_llm2`. It calls the public
+with **RubyLLM 2.1.1**, pinned in `Gemfile.ruby_llm2`. It calls the public
 single-response `generate`; TurnKit alone executes tools. There is no separate
 HTTP adapter. The root Gemfile keeps stable RubyLLM 1.16/Rails 7.2 compatibility;
 this directory's `Gemfile` supports native 1.16 validation with Rails 8.1.
-Each alternate Gemfile has a lockfile. Adopting a prerelease is an application
-decision; a future stable release needs regression/live validation again.
+Each alternate Gemfile has a lockfile. RubyLLM 2.1 requires Ruby >= 3.2.
+The historical paid validation in `VALIDATION.md` used RC2; it is not evidence
+of live-provider validation on 2.1.1. Current compatibility tests use synthetic
+responses with the installed SDK's real request renderers.
 
 ## Reproduce in an orb
 
@@ -69,7 +71,7 @@ controller**. These select `claude-opus-4-8`/`high` or
 `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` through the environment, never command text.
 
 ```sh
-# Use Gemfile for 1.16, or Gemfile.ruby_llm2 for RC2. Start Redis as above.
+# Use Gemfile for 1.16, or Gemfile.ruby_llm2 for 2.1.1. Start Redis as above.
 export BUNDLE_GEMFILE="$PWD/examples/interactive_validation/Gemfile"
 amp orb service start native-validation --command 'env PATH=/opt/hostedtoolcache/Ruby/3.3.10/x64/bin:$PATH BUNDLE_PATH=/home/user/.cache/turnkit/bundle BUNDLE_GEMFILE=/home/user/workspace/repo/examples/interactive_validation/Gemfile TURNKIT_VALIDATION_PROVIDER=gemini TURNKIT_INTERACTIVE_LIVE=1 bundle exec sidekiq -r ./examples/interactive_validation/app.rb -q interactive_validation -c 4 -e test'
 TURNKIT_VALIDATION_PROVIDER=gemini TURNKIT_VALIDATION_WORKER=native-validation TURNKIT_INTERACTIVE_LIVE=1 bundle exec ruby examples/interactive_validation/scenarios.rb native
@@ -113,7 +115,7 @@ wall-time deadline exhaustion, iteration limits, concurrent claims/resume,
 rollback, and fencing with deterministic clients under memory and PostgreSQL:
 
 ```sh
-# Rails 8.1 + RubyLLM 2.0.0.rc2 (using BUNDLE_GEMFILE above):
+# Rails 8.1 + RubyLLM 2.1.1 (using BUNDLE_GEMFILE above):
 TURNKIT_TEST_DATABASE_URL=postgresql:///turnkit_test bundle exec rake test
 # Rails 8.1 + stable RubyLLM 1.16:
 BUNDLE_GEMFILE=examples/interactive_validation/Gemfile TURNKIT_TEST_DATABASE_URL=postgresql:///turnkit_test bundle exec rake test

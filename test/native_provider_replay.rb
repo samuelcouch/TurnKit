@@ -25,6 +25,24 @@ module NativeProviderReplay
     end
   end
 
+  def test_native_replay_requires_matching_model_provenance
+    each_native_provider do |provider, model|
+      first = native_fixture(provider, model, tools: true)
+      client = ReplayClient.new(first, first, first)
+      result = client.chat(model: model, messages: [], tools: [], instructions: "")
+      part = result.parts.find { |candidate| candidate["type"] == "provider" }
+      projected = { role: :assistant, content: result.text,
+        tool_calls: result.parts.select { |candidate| candidate["type"] == "tool_call" }, provider_parts: [part] }
+      client.chat(model: model, messages: [projected], tools: [], instructions: "")
+      assert_includes client.payloads.last.to_json, "opaque-fixture"
+      part["model"] = "different-model"
+      client.chat(model: model, messages: [projected], tools: [], instructions: "")
+      refute_includes client.payloads.last.to_json, "opaque-fixture"
+      assert_includes client.payloads.last.to_json, "public answer"
+      assert_includes client.payloads.last.to_json, "context_checking_tool"
+    end
+  end
+
   def test_native_blocks_survive_pause_reload_and_multistep_tools
     each_native_provider do |provider, model|
       first = native_fixture(provider, model, tools: true)

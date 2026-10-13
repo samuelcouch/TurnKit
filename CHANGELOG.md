@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.1 - 2026-10-13
+
+- Validate against stable RubyLLM 2.1.1 while retaining the 1.16 compatibility bundle.
+- Scope opaque provider replay to the originating requested model and matching
+  protocol. Older records without model provenance fall back to portable text
+  and tool calls; signed continuation state is not reused across model changes.
+- Forward media provider/protocol selection, leave omitted image sizes to the
+  provider, and classify SDK configuration errors as TurnKit configuration errors.
+- Preserve unknown registry costs when prices are incomplete, including after
+  serialization and aggregation.
+
 ## 0.10.0 - 2026-09-19
 
 - Add `Adapters::OpenRouterJev` for the non-chat Decisions alpha endpoint, reusing

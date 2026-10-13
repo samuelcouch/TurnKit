@@ -18,7 +18,7 @@ module TurnKit
         ensure_ruby_llm!
         raise ModelAccessError, "model is required" if model.to_s.empty?
         if @protocol && !::RubyLLM::Chat.method_defined?(:generate)
-          raise ConfigError, "protocol selection requires RubyLLM 2.0 (currently 2.0.0.rc2)"
+          raise ConfigError, "protocol selection requires RubyLLM >= 2.0"
         end
 
         configure_from_environment
@@ -58,7 +58,7 @@ module TurnKit
           chat.respond_to?(:with_tool) ? chat.with_tool(ruby_llm_tool(tool)) : chat.with_tools(ruby_llm_tool(tool))
         end
         tool_names = {}
-        Array(messages).each { |message| add_message(chat, message, provider: chat.model.provider, tool_names: tool_names) }
+        Array(messages).each { |message| add_message(chat, message, provider: chat.model.provider, model: model, tool_names: tool_names) }
         # The runtime supplies durable snapshots in messages. Direct adapter
         # callers must preserve this message themselves on subsequent calls.
         if context_in_history && !dynamic_instructions.to_s.empty?
@@ -69,6 +69,8 @@ module TurnKit
         normalize_response(response, model: model)
       rescue ConfigError
         raise
+      rescue ::RubyLLM::ConfigurationError => error
+        raise ConfigError, error.message
       rescue ::RubyLLM::Error, ::RubyLLM::ModelNotFoundError => error
         # Provider failures (after RubyLLM's own retries) are task failures,
         # not worker crashes to be replayed by durable reconciliation.
@@ -83,14 +85,16 @@ module TurnKit
           model: model,
           provider: provider,
           assume_model_exists: assume_model_exists || false,
-          size: size || "1024x1024",
+          size: size,
           with: input_images,
           mask: mask,
           **{ (::RubyLLM::Chat.method_defined?(:generate) ? :provider_options : :params) => params || {} }
         )
-        normalize_image_response(image, model: model, provider: provider, params: { "size" => size || "1024x1024" }.merge(params || {}), metadata: metadata)
+        normalize_image_response(image, model: model, provider: provider, params: { "size" => size }.compact.merge(params || {}), metadata: metadata)
       rescue ConfigError
         raise
+      rescue ::RubyLLM::ConfigurationError => error
+        raise ConfigError, error.message
       rescue ::RubyLLM::Error, ::RubyLLM::ModelNotFoundError => error
         raise ModelError, "#{error.class}: #{error.message}"
       end
@@ -100,7 +104,8 @@ module TurnKit
         configure_from_environment
         media_input = MediaInput.wrap(media)
 
-        chat = ::RubyLLM.chat(model: model)
+        validate!(model: model) if @protocol
+        chat = ::RubyLLM.chat(**{ model: model, provider: provider, protocol: @protocol }.compact)
         chat.with_schema(normalize_schema(output_schema)) if output_schema
         if params && !params.empty?
           if ::RubyLLM::Chat.method_defined?(:generate)
@@ -122,6 +127,8 @@ module TurnKit
         normalize_media_analysis_response(response, media: media_input, model: model, provider: provider, params: params || {}, metadata: metadata)
       rescue ConfigError
         raise
+      rescue ::RubyLLM::ConfigurationError => error
+        raise ConfigError, error.message
       rescue ::RubyLLM::Error, ::RubyLLM::ModelNotFoundError => error
         raise ModelError, "#{error.class}: #{error.message}"
       end
@@ -185,11 +192,23 @@ module TurnKit
           chat.send(:provider_completion)
         end
 
-        def add_message(chat, message, provider: nil, tool_names: {})
+        def add_message(chat, message, provider: nil, model: nil, tool_names: {})
           role = (message[:role] || message["role"]).to_sym
           content = message[:content] || message["content"] || ""
           kind = { "openai" => "openai_responses", "anthropic" => "anthropic", "gemini" => "gemini" }[provider.to_s]
-          replay = Array(message[:provider_parts] || message["provider_parts"]).find { |part| part["kind"] == kind } if kind
+          protocol = { "openai" => :responses, "anthropic" => :anthropic, "gemini" => :gemini }[provider.to_s]
+          if chat.respond_to?(:provider) && chat.provider.respond_to?(:protocol_for) && protocol
+            # Honor SDK configuration and per-model routing as well as our override.
+            configured = chat.provider.config.public_send("#{provider}_protocol")
+            selected = @protocol || configured
+            codec = selected ? chat.provider.protocols[selected.to_sym] : chat.provider.protocol_for(chat.model)
+            kind = nil unless codec == chat.provider.protocols[protocol]
+          elsif @protocol && @protocol.to_s != protocol.to_s
+            kind = nil
+          end
+          replay = Array(message[:provider_parts] || message["provider_parts"]).find do |part|
+            part["kind"] == kind && model && part["model"] == model
+          end if kind
           calls = ruby_llm_tool_calls(message[:tool_calls] || message["tool_calls"])
           raw_content = replay&.fetch("data")
           if raw_content && %w[anthropic gemini].include?(kind) && !::RubyLLM::Chat.method_defined?(:generate)
@@ -292,7 +311,7 @@ module TurnKit
           )
           Result.new(
             text: response_text(response),
-            parts: response_parts(response, tool_calls: tool_calls),
+            parts: response_parts(response, tool_calls: tool_calls, model: model),
             output_data: response_data(response),
             tool_calls: tool_calls,
             usage: usage,
@@ -300,7 +319,7 @@ module TurnKit
           )
         end
 
-        def response_parts(response, tool_calls:)
+        def response_parts(response, tool_calls:, model:)
           content = response.respond_to?(:content) ? response.content : response
           parts = case content
           when Array
@@ -313,11 +332,11 @@ module TurnKit
           end.compact
           raw = response.raw.body if response.respond_to?(:raw) && response.raw.respond_to?(:body)
           if raw.is_a?(Hash) && raw["object"] == "response"
-            parts << { "type" => "provider", "kind" => "openai_responses", "data" => raw.fetch("output") }
+            parts << { "type" => "provider", "kind" => "openai_responses", "model" => model, "data" => raw.fetch("output") }
           elsif raw.is_a?(Hash) && raw["type"] == "message" && raw["role"] == "assistant"
-            parts << { "type" => "provider", "kind" => "anthropic", "data" => raw.fetch("content") }
+            parts << { "type" => "provider", "kind" => "anthropic", "model" => model, "data" => raw.fetch("content") }
           elsif raw.is_a?(Hash) && raw.dig("candidates", 0, "content", "parts")
-            parts << { "type" => "provider", "kind" => "gemini", "data" => raw.dig("candidates", 0, "content", "parts") }
+            parts << { "type" => "provider", "kind" => "gemini", "model" => model, "data" => raw.dig("candidates", 0, "content", "parts") }
           end
           parts + Array(tool_calls).map { |call| { "type" => "tool_call", "id" => call.id, "name" => call.name, "arguments" => call.arguments } }
         end

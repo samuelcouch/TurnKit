@@ -3,6 +3,24 @@
 require_relative "test_helper"
 
 class CostTest < Minitest::Test
+  def test_registry_partial_pricing_stays_unknown_through_storage_and_aggregation
+    require "ruby_llm"
+    model_class = RubyLLM.models.find("gpt-4.1-mini").class
+    model = model_class.new(id: "partial-price", provider: "openai",
+      pricing: { text_tokens: { standard: { input_per_million: 2.0 } } })
+    original = RubyLLM.method(:models)
+    registry = Object.new
+    registry.define_singleton_method(:find) { |_| model }
+    RubyLLM.define_singleton_method(:models) { registry }
+    cost = TurnKit::Cost.from_ruby_llm(TurnKit::Usage.new(input_tokens: 100, output_tokens: 20), "partial-price")
+    assert_in_delta 0.0002, cost.input
+    assert_nil cost.total
+    restored = TurnKit::Cost.from_hash(JSON.parse(cost.to_h.to_json))
+    assert_nil TurnKit::Cost.aggregate([restored, TurnKit::Cost.new(total: 1.0)]).total
+  ensure
+    RubyLLM.define_singleton_method(:models, original) if original
+  end
+
   def test_workflow_run_honors_max_spend_guardrail
     expensive_client = FakeClient.new(TurnKit::Result.new(text: "too much", usage: TurnKit::Usage.new(cost: 0.02)))
     workflow = TurnKit::Agent.new(name: "workflow", orchestrator: true, client: expensive_client, max_spend: 0.01)

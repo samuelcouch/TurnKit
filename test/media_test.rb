@@ -88,6 +88,9 @@ class MediaTest < Minitest::Test
     assert_equal "resolved-image-model", result.images.first.model
     assert_equal 4, result.usage.input_tokens
     assert_equal 0.02, result.usage.cost
+    default_size = TurnKit::Adapters::RubyLLM.new.paint(prompt: "paint", model: "image-model")
+    assert_nil calls.last.fetch(:size)
+    refute default_size.images.first.params.key?("size")
   ensure
     if defined?(RubyLLM) && original
       $VERBOSE = nil
@@ -134,8 +137,8 @@ class MediaTest < Minitest::Test
     models = []
     verbose = $VERBOSE
     $VERBOSE = nil
-    RubyLLM.define_singleton_method(:chat) do |model:|
-      models << model
+    RubyLLM.define_singleton_method(:chat) do |**options|
+      models << options
       fake_chat
     end
     $VERBOSE = verbose
@@ -151,7 +154,7 @@ class MediaTest < Minitest::Test
     )
 
     content = fake_chat.messages.first.fetch(:content)
-    assert_equal [ "media-model" ], models
+    assert_equal [ { model: "media-model", provider: :gemini } ], models
     if RubyLLM::Chat.method_defined?(:generate)
       assert_instance_of String, content
       assert_equal "Review it", content

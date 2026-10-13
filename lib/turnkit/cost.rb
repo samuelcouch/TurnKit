@@ -91,7 +91,8 @@ module TurnKit
         ::RubyLLM::Tokens.new(input: usage.input_tokens, output: usage.output_tokens,
           cached: usage.cached_tokens, cache_creation: usage.cache_write_tokens, thinking: usage.thinking_tokens)
       end
-      from_hash(::RubyLLM::Cost.new(tokens: tokens, model: model_info).to_h)
+      cost = ::RubyLLM::Cost.new(tokens: tokens, model: model_info)
+      from_hash(cost.to_h.merge(unknown: cost.total.nil?))
     rescue ::RubyLLM::ModelNotFoundError
       new
     end

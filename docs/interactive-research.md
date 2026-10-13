@@ -199,13 +199,14 @@ in the receiving application.
 ## GPT-6 Astra and provider continuation state
 
 OpenAI requires Responses for GPT-6 Astra function calling. RubyLLM 1.16 uses
-Chat Completions and cannot supply that endpoint. Opt into RubyLLM 2.0.0.rc2
-explicitly in the application's Gemfile; it is a prerelease, not a mandatory
-stable dependency upgrade. The same TurnKit adapter supports both versions:
+Chat Completions and cannot supply that endpoint. Select stable RubyLLM 2.1.1
+explicitly in the application's Gemfile (Ruby >= 3.2). The same TurnKit adapter
+supports 1.16 and 2.1.1; the root bundle retains legacy compatibility:
 
 ```ruby
 # Gemfile, replacing the application's ruby_llm 1.16 constraint:
-gem "ruby_llm", "2.0.0.rc2"
+gem "ruby_llm", "2.1.1"
+gem "json", "< 3" # Required with Rails versions before 8.1.4.
 
 # Agent registration:
 require "ruby_llm"
